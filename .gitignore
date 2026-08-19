@@ -1,0 +1,47 @@
+# Dependencies
+node_modules/
+
+# Environment / secrets — never commit real credentials.
+# Explicitly allow .env.example files (placeholders only) through the
+# broader .env* exclusion below.
+.env
+.env.*
+!.env.example
+
+# Local/dev-only databases (PGlite file storage — never the production
+# source of truth; production data lives in Neon, not in this repo)
+data/
+*.pgdata/
+
+# Build output
+dist/
+dist-ssr/
+build/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Test/coverage artifacts
+coverage/
+.nyc_output/
+
+# Editor / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Local CLI state for deployment tooling
+.netlify/
+.render/
+
+*.local

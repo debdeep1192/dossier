@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: dossier-backend
+    runtime: node
+    plan: free
+    region: oregon
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    # Only rebuild/redeploy this service when backend files actually change —
+    # a frontend-only commit shouldn't trigger a backend redeploy.
+    buildFilter:
+      paths:
+        - backend/**
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3001
+      - key: DATABASE_URL
+        sync: false  # set manually to your Neon connection string
+      - key: JWT_SECRET
+        generateValue: true  # Render generates a strong persistent secret
+      - key: FRONTEND_URL
+        sync: false  # set manually to your Netlify site URL

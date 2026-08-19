@@ -1,0 +1,20 @@
+.tag-input__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.tag-input__field {
+  width: 100%;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+  background: transparent;
+}
+.tag-input__field:focus {
+  outline: none;
+  border-color: var(--color-teal);
+  border-style: solid;
+}

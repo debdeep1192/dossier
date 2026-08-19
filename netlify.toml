@@ -1,0 +1,12 @@
+[build]
+  base = "frontend"
+  publish = "dist"
+  command = "npm run build"
+
+# React Router uses client-side routing; without this, refreshing on a
+# route like /research/:id returns a 404 from Netlify's static host
+# instead of letting the SPA handle it.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

@@ -1,0 +1,53 @@
+import { NavLink, Outlet } from 'react-router-dom';
+import './AppShell.css';
+
+const NAV_ITEMS = [
+  { to: '/research', label: 'Research', icon: '📖' },
+  { to: '/trips', label: 'Trips', icon: '🧳' },
+  { to: '/live', label: 'Live', icon: '📍' },
+  { to: '/more', label: 'More', icon: '⋯' },
+];
+
+export default function AppShell() {
+  return (
+    <div className="app-shell">
+      <aside className="app-shell__sidebar">
+        <div className="app-shell__brand">
+          <span className="app-shell__brand-mark">D</span>
+          <span className="app-shell__brand-name">Dossier</span>
+        </div>
+        <nav className="app-shell__sidebar-nav">
+          {NAV_ITEMS.map(item => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              className={({ isActive }) => `app-shell__sidebar-link ${isActive ? 'app-shell__sidebar-link--active' : ''}`}
+            >
+              <span aria-hidden="true">{item.icon}</span>
+              <span>{item.label}</span>
+            </NavLink>
+          ))}
+        </nav>
+      </aside>
+
+      <div className="app-shell__main">
+        <main className="app-shell__content">
+          <Outlet />
+        </main>
+      </div>
+
+      <nav className="app-shell__bottom-nav" aria-label="Primary">
+        {NAV_ITEMS.map(item => (
+          <NavLink
+            key={item.to}
+            to={item.to}
+            className={({ isActive }) => `app-shell__bottom-link ${isActive ? 'app-shell__bottom-link--active' : ''}`}
+          >
+            <span className="app-shell__bottom-icon" aria-hidden="true">{item.icon}</span>
+            <span className="app-shell__bottom-label">{item.label}</span>
+          </NavLink>
+        ))}
+      </nav>
+    </div>
+  );
+}
