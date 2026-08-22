@@ -14,9 +14,23 @@ import { LoadingState } from './components/States';
 // AuthGate pair — "authenticated" becomes "hasProfile", "/auth" becomes
 // WelcomePage rendered in place (no separate route needed since there's
 // no login/logout to navigate back to).
+//
+// Progressive render: AppShell (sidebar/nav chrome) needs no profile or
+// DB data to render, so it's shown immediately rather than replacing the
+// whole screen with a spinner while getDb()/getProfile() resolve
+// underneath — the person sees the actual app immediately instead of a
+// blank loading screen. Only the content area shows a loading state
+// while that resolves. This does not change how long PGlite itself
+// takes to initialize; it only avoids blocking paint on it.
 function RootGate() {
   const { loading, hasProfile } = useProfile();
-  if (loading) return <LoadingState label="Loading Dossier…" />;
+  if (loading) {
+    return (
+      <AppShell>
+        <LoadingState label="Loading Dossier…" />
+      </AppShell>
+    );
+  }
   if (!hasProfile) return <WelcomePage />;
   return <AppShell />;
 }

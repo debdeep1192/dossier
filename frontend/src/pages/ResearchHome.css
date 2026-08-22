@@ -63,11 +63,51 @@
   font-weight: 600;
 }
 
+.destination-card__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.destination-card__delete {
+  display: inline-block;
+  border: 1px dashed transparent;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-danger);
+  cursor: pointer;
+}
+
+.destination-card__delete:hover {
+  border-color: var(--color-danger);
+  background: #FBEEE9;
+}
+
 .result-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
+}
+
+.result-row__delete {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-danger);
+  cursor: pointer;
+}
+
+.result-row__delete:hover {
+  background: #FBEEE9;
 }
 
 .result-row__main {

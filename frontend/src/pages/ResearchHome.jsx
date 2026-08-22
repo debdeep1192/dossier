@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { destinationsApi } from '../api/research';
+import { useNavigate } from 'react-router-dom';
+import { destinationsApi, researchItemsApi } from '../api/research';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import SearchBar from '../components/SearchBar';
 import Card from '../components/Card';
@@ -23,6 +23,7 @@ export default function ResearchHome() {
   const [searching, setSearching] = useState(false);
 
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
 
   const loadAll = useCallback(async () => {
     setError(null);
@@ -39,6 +40,28 @@ export default function ResearchHome() {
   }, []);
 
   useEffect(() => { loadAll(); }, [loadAll]);
+
+  async function handleDeleteItem(item) {
+    if (!window.confirm(`Remove "${item.title}" from your research? It will be moved to trash rather than permanently deleted.`)) return;
+    await researchItemsApi.remove(item.id);
+    // Item rows can currently be showing in either the Recently Updated
+    // list or the search results list (never both at once, per
+    // isSearchMode) — update whichever is active so the row disappears
+    // immediately without a full reload.
+    setRecentItems(prev => prev ? prev.filter(i => i.id !== item.id) : prev);
+    setSearchResults(prev => prev ? prev.filter(i => i.id !== item.id) : prev);
+  }
+
+  async function handleDeleteDestination(destination) {
+    if (!window.confirm(`Delete "${destination.name}" and everything in it? This includes ${destination.item_count} research item${destination.item_count === '1' ? '' : 's'}. It will be moved to trash rather than permanently deleted.`)) return;
+    setDeleteError('');
+    try {
+      await destinationsApi.remove(destination.id);
+      setDestinations(prev => prev.filter(d => d.id !== destination.id));
+    } catch (e) {
+      setDeleteError(e.message);
+    }
+  }
 
   useEffect(() => {
     if (!debouncedQuery.trim()) {
@@ -83,7 +106,7 @@ export default function ResearchHome() {
           {!searching && searchResults && searchResults.length > 0 && (
             <div className="research-home__result-list">
               {searchResults.map(item => (
-                <SearchResultRow key={item.id} item={item} navigate={navigate} />
+                <SearchResultRow key={item.id} item={item} navigate={navigate} onDelete={handleDeleteItem} />
               ))}
             </div>
           )}
@@ -95,7 +118,7 @@ export default function ResearchHome() {
               <h2>Recently updated</h2>
               <div className="research-home__result-list">
                 {recentItems.map(item => (
-                  <SearchResultRow key={item.id} item={item} navigate={navigate} />
+                  <SearchResultRow key={item.id} item={item} navigate={navigate} onDelete={handleDeleteItem} />
                 ))}
               </div>
             </section>
@@ -103,6 +126,7 @@ export default function ResearchHome() {
 
           <section className="research-home__section">
             <h2>Destinations</h2>
+            {deleteError && <p className="research-home__form-error" role="alert">{deleteError}</p>}
             {destinations.length === 0 ? (
               <EmptyState
                 icon="📖"
@@ -114,7 +138,7 @@ export default function ResearchHome() {
             ) : (
               <div className="research-home__destination-grid">
                 {destinations.map(dest => (
-                  <DestinationCard key={dest.id} destination={dest} onClick={() => navigate(`/research/${dest.id}`)} />
+                  <DestinationCard key={dest.id} destination={dest} onClick={() => navigate(`/research/${dest.id}`)} onDelete={() => handleDeleteDestination(dest)} />
                 ))}
               </div>
             )}
@@ -131,7 +155,7 @@ export default function ResearchHome() {
   );
 }
 
-function DestinationCard({ destination, onClick }) {
+function DestinationCard({ destination, onClick, onDelete }) {
   return (
     <Card interactive onClick={onClick} className="destination-card">
       <h3 className="destination-card__title">{destination.name}</h3>
@@ -141,11 +165,21 @@ function DestinationCard({ destination, onClick }) {
         <span aria-hidden="true">·</span>
         <span>{destination.item_count} item{destination.item_count === '1' ? '' : 's'}</span>
       </div>
+      <div className="destination-card__actions">
+        <button
+          type="button"
+          className="destination-card__delete"
+          onClick={(e) => { e.stopPropagation(); onDelete(); }}
+          aria-label={`Delete ${destination.name}`}
+        >
+          Delete
+        </button>
+      </div>
     </Card>
   );
 }
 
-function SearchResultRow({ item, navigate }) {
+function SearchResultRow({ item, navigate, onDelete }) {
   return (
     <Card
       interactive
@@ -163,6 +197,14 @@ function SearchResultRow({ item, navigate }) {
           {item.section_name ? ` · ${item.section_name}` : ' · Destination overview'}
         </div>
       </div>
+      <button
+        type="button"
+        className="result-row__delete"
+        onClick={(e) => { e.stopPropagation(); onDelete(item); }}
+        aria-label={`Delete ${item.title}`}
+      >
+        Delete
+      </button>
       <PriorityBadge priority={item.priority} />
     </Card>
   );

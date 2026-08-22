@@ -7,9 +7,12 @@
     <meta name="theme-color" content="#2A9D8F" />
     <meta name="description" content="A personal travel research dossier, trip planner, and travel companion." />
     <link rel="manifest" href="/manifest.json" />
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,500;8..60,600;8..60,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Google Fonts removed: it was a blocking external network request
+         at startup, contradicting the offline-first goal. tokens.css's
+         --font-display/--font-body stacks already have solid system-font
+         fallbacks (Georgia/serif, -apple-system/Segoe UI/sans-serif), so
+         the app now renders correctly with those until the two font
+         files are self-hosted under public/fonts/ in a follow-up. -->
     <title>Dossier — Travel Research &amp; Trips</title>
   </head>
   <body>
