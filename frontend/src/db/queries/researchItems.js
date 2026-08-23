@@ -1,5 +1,5 @@
-import { getDb } from '../index';
-import { ITEM_KINDS, PRIORITIES, isNonEmptyString, isValidUUID, ValidationError, NotFoundError } from './validate';
+import { getDb } from '../index.js';
+import { ITEM_KINDS, PRIORITIES, isNonEmptyString, isValidUUID, ValidationError, NotFoundError } from './validate.js';
 
 async function fetchFullItem(db, id) {
   const itemResult = await db.query('SELECT * FROM research_items WHERE id = $1 AND deleted_at IS NULL', [id]);
@@ -42,7 +42,7 @@ export async function getResearchItem(id) {
 export async function createResearchItem(input) {
   const {
     destinationId, sectionId, itemKind, title, priority, content,
-    entryFee, openingHours, visitDurationMinutes, priceRange, areaLocation, mapsUrl, lastVerifiedAt,
+    price, openingHours, visitDurationMinutes, areaLocation, mapsUrl, lastVerifiedAt, details,
   } = input;
 
   if (!isValidUUID(destinationId)) throw new ValidationError('A valid destination is required.');
@@ -63,13 +63,13 @@ export async function createResearchItem(input) {
   const result = await db.query(`
     INSERT INTO research_items (
       destination_id, section_id, item_kind, title, priority, content,
-      entry_fee, opening_hours, visit_duration_minutes, price_range, area_location, maps_url, last_verified_at
+      price, opening_hours, visit_duration_minutes, area_location, maps_url, last_verified_at, details
     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
     RETURNING *
   `, [
     destinationId, sectionId || null, itemKind, title.trim(), priority || null, content || null,
-    entryFee || null, openingHours || null, visitDurationMinutes || null, priceRange || null,
-    areaLocation || null, mapsUrl || null, lastVerifiedAt || null,
+    price ? JSON.stringify(price) : null, openingHours || null, visitDurationMinutes || null,
+    areaLocation || null, mapsUrl || null, lastVerifiedAt || null, details ? JSON.stringify(details) : null,
   ]);
 
   return { ...result.rows[0], tags: [], sources: [], relatedItems: [] };
@@ -84,7 +84,7 @@ export async function updateResearchItem(id, input) {
 
   const {
     sectionId, itemKind, title, priority, content,
-    entryFee, openingHours, visitDurationMinutes, priceRange, areaLocation, mapsUrl, lastVerifiedAt,
+    price, openingHours, visitDurationMinutes, areaLocation, mapsUrl, lastVerifiedAt, details,
   } = input;
 
   if (itemKind !== undefined && !ITEM_KINDS.includes(itemKind)) throw new ValidationError(`Item kind must be one of: ${ITEM_KINDS.join(', ')}`);
@@ -110,13 +110,13 @@ export async function updateResearchItem(id, input) {
       title = COALESCE($4, title),
       priority = CASE WHEN $5::boolean THEN $6 ELSE priority END,
       content = CASE WHEN $7::boolean THEN $8 ELSE content END,
-      entry_fee = CASE WHEN $9::boolean THEN $10 ELSE entry_fee END,
+      price = CASE WHEN $9::boolean THEN $10 ELSE price END,
       opening_hours = CASE WHEN $11::boolean THEN $12 ELSE opening_hours END,
       visit_duration_minutes = CASE WHEN $13::boolean THEN $14 ELSE visit_duration_minutes END,
-      price_range = CASE WHEN $15::boolean THEN $16 ELSE price_range END,
-      area_location = CASE WHEN $17::boolean THEN $18 ELSE area_location END,
-      maps_url = CASE WHEN $19::boolean THEN $20 ELSE maps_url END,
-      last_verified_at = CASE WHEN $21::boolean THEN $22 ELSE last_verified_at END,
+      area_location = CASE WHEN $15::boolean THEN $16 ELSE area_location END,
+      maps_url = CASE WHEN $17::boolean THEN $18 ELSE maps_url END,
+      last_verified_at = CASE WHEN $19::boolean THEN $20 ELSE last_verified_at END,
+      details = CASE WHEN $21::boolean THEN $22 ELSE details END,
       updated_at = now()
     WHERE id = $1
     RETURNING *
@@ -124,13 +124,13 @@ export async function updateResearchItem(id, input) {
     id, newSectionId, itemKind || null, title ? title.trim() : null,
     priority !== undefined, priority || null,
     content !== undefined, content,
-    entryFee !== undefined, entryFee,
+    price !== undefined, price ? JSON.stringify(price) : null,
     openingHours !== undefined, openingHours,
     visitDurationMinutes !== undefined, visitDurationMinutes,
-    priceRange !== undefined, priceRange,
     areaLocation !== undefined, areaLocation,
     mapsUrl !== undefined, mapsUrl,
     lastVerifiedAt !== undefined, lastVerifiedAt,
+    details !== undefined, details ? JSON.stringify(details) : null,
   ]);
 
   return fetchFullItem(db, result.rows[0].id);
@@ -144,7 +144,17 @@ export async function deleteResearchItem(id) {
   const db = await getDb();
   const existing = await db.query('SELECT id FROM research_items WHERE id = $1 AND deleted_at IS NULL', [id]);
   if (existing.rows.length === 0) throw new NotFoundError('not_found');
-  await db.query('UPDATE research_items SET deleted_at = now() WHERE id = $1', [id]);
+  // section_id is cleared alongside the soft-delete (not just deleted_at
+  // set) so a soft-deleted item no longer counts against
+  // research_items.section_id's ON DELETE RESTRICT constraint. Without
+  // this, deleteSection()'s own application-level "no items left" check
+  // (which correctly filters on deleted_at IS NULL) could pass while the
+  // subsequent DELETE FROM sections still fails at the database level,
+  // since RESTRICT only sees row existence, not the soft-delete
+  // convention. A trashed item has no meaningful "current section"
+  // anyway, so this loses no real information — its title/content/price/
+  // etc. are all untouched, only its section placement is cleared.
+  await db.query('UPDATE research_items SET deleted_at = now(), section_id = NULL WHERE id = $1', [id]);
 }
 
 // ---- Tags ----

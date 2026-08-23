@@ -1,28 +1,34 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { destinationsApi, sectionsApi, researchItemsApi } from '../api/research';
+import { destinationsApi, sectionsApi, researchItemsApi, intakeApi } from '../api/research';
+import { useCachedQuery, invalidateCachedQuery, invalidateCachedQueryPrefix } from '../hooks/useCachedQuery';
 import Card from '../components/Card';
 import Button from '../components/Button';
 import Modal from '../components/Modal';
 import { Input, TextArea, Select } from '../components/Field';
 import { PriorityBadge, ItemKindBadge } from '../components/Badge';
+import { PriceField, PriceDisplay } from '../components/Price';
 import { LoadingState, ErrorState, EmptyState } from '../components/States';
 import './DestinationDetail.css';
 
 const ITEM_KIND_OPTIONS = [
   { value: 'attraction', label: 'Attraction' },
-  { value: 'hotel', label: 'Hotel' },
+  { value: 'activity', label: 'Activity' },
   { value: 'restaurant', label: 'Restaurant' },
-  { value: 'transport_option', label: 'Transport Option' },
+  { value: 'food', label: 'Food / Dish' },
+  { value: 'accommodation', label: 'Accommodation' },
+  { value: 'transport', label: 'Transport' },
   { value: 'practical_info', label: 'Practical Info' },
   { value: 'note', label: 'Research Note (general)' },
 ];
 
 const KIND_ACCENT = {
   attraction: 'var(--color-teal)',
-  hotel: 'var(--color-saffron-dark)',
+  activity: 'var(--color-teal-dark)',
   restaurant: 'var(--color-coral)',
-  transport_option: 'var(--color-neutral-500)',
+  food: 'var(--color-saffron)',
+  accommodation: 'var(--color-saffron-dark)',
+  transport: 'var(--color-neutral-500)',
   practical_info: 'var(--color-teal-dark)',
   note: 'var(--color-neutral-400)',
 };
@@ -30,29 +36,33 @@ const KIND_ACCENT = {
 export default function DestinationDetail() {
   const { destinationId } = useParams();
   const navigate = useNavigate();
-  const [data, setData] = useState(null);
-  const [error, setError] = useState(null);
   const [filterQuery, setFilterQuery] = useState('');
 
   const [showAddSection, setShowAddSection] = useState(false);
   const [showAddItem, setShowAddItem] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [addItemSectionId, setAddItemSectionId] = useState(undefined); // undefined = destination-level
 
   const sectionRefs = useRef({});
 
-  const load = useCallback(async () => {
-    setError(null);
-    try {
-      const result = await destinationsApi.get(destinationId);
-      setData(result);
-    } catch (e) {
-      setError(e.message);
-    }
-  }, [destinationId]);
+  const fetcher = useCallback(() => destinationsApi.get(destinationId), [destinationId]);
+  const { data, error, refresh } = useCachedQuery(`destination:${destinationId}`, fetcher);
 
-  useEffect(() => { load(); }, [load]);
+  function afterMutation() {
+    invalidateCachedQuery(`destination:${destinationId}`);
+    // The Research home list (destination cards, recently-updated list)
+    // shows counts/timestamps that just changed — invalidate it too so
+    // navigating back there doesn't show stale numbers from cache.
+    invalidateCachedQueryPrefix('research-home');
+    refresh();
+  }
 
-  if (error) return <ErrorState description={error} onRetry={load} />;
+  // Loading state only when there is truly nothing to show yet (first
+  // visit to this destination in this session) — a revisit shows the
+  // cached content immediately while refresh() quietly re-runs, so
+  // moving between destinations already seen this session has no
+  // loading flash at all.
+  if (error && !data) return <ErrorState description={error} onRetry={refresh} />;
   if (!data) return <LoadingState label="Loading destination…" />;
 
   const { destination, sections, items } = data;
@@ -126,13 +136,14 @@ export default function DestinationDetail() {
         >
           + General Note
         </Button>
+        <Button variant="secondary" size="sm" onClick={() => setShowImport(true)}>+ Import from text</Button>
       </div>
 
       {sections.length === 0 && destinationLevelNotes.length === 0 && (
         <EmptyState
           icon="📖"
           title="This destination is empty"
-          description="Add a section (like Attractions or Hotels) to start organizing your research, or add a general note first."
+          description="Add a section (like Attractions or Food) to start organizing your research, or add a general note first."
           actionLabel="+ Add Section"
           onAction={() => setShowAddSection(true)}
         />
@@ -175,7 +186,7 @@ export default function DestinationDetail() {
         open={showAddSection}
         destinationId={destinationId}
         onClose={() => setShowAddSection(false)}
-        onCreated={() => { setShowAddSection(false); load(); }}
+        onCreated={() => { setShowAddSection(false); afterMutation(); }}
       />
       <AddItemModal
         open={showAddItem}
@@ -183,13 +194,20 @@ export default function DestinationDetail() {
         sections={sections}
         initialSectionId={addItemSectionId}
         onClose={() => setShowAddItem(false)}
-        onCreated={(item) => { setShowAddItem(false); navigate(`/research/${destinationId}/items/${item.id}`); }}
+        onCreated={(item) => { setShowAddItem(false); invalidateCachedQuery(`destination:${destinationId}`); navigate(`/research/${destinationId}/items/${item.id}`); }}
+      />
+      <ImportTextModal
+        open={showImport}
+        destinationId={destinationId}
+        onClose={() => setShowImport(false)}
+        onImported={(intake) => { setShowImport(false); navigate(`/research/${destinationId}/review/${intake.id}`); }}
       />
     </div>
   );
 }
 
 function ItemRow({ item, onClick }) {
+  const priceText = item.price ? <PriceDisplay price={item.price} /> : null;
   return (
     <Card interactive padding="sm" accentColor={KIND_ACCENT[item.item_kind]} onClick={onClick} className="item-row">
       <div className="item-row__main">
@@ -198,6 +216,7 @@ function ItemRow({ item, onClick }) {
           <ItemKindBadge kind={item.item_kind} />
         </div>
         {item.content && <p className="item-row__snippet">{item.content}</p>}
+        {priceText && <p className="item-row__price">{priceText}</p>}
       </div>
       <PriorityBadge priority={item.priority} />
     </Card>
@@ -233,7 +252,7 @@ function AddSectionModal({ open, destinationId, onClose, onCreated }) {
           required
           value={name}
           onChange={e => setName(e.target.value)}
-          placeholder="e.g. Attractions, Hotels, Food to Try"
+          placeholder="e.g. Attractions, Food, Where to Stay"
           hint="Sections are fully customisable — use whatever structure fits this destination."
           autoFocus
         />
@@ -244,14 +263,33 @@ function AddSectionModal({ open, destinationId, onClose, onCreated }) {
   );
 }
 
+// Fields shown for each item_kind — the anti-generic-form contract.
+// Every kind gets: title, priority, content (all always relevant).
+// price is shown for the kinds where "how much does this cost" is a
+// meaningful question; hours/duration/location only for physical
+// places; practical_info and note get none of the type-specific extras,
+// since they're deliberately unstructured general knowledge.
+const KIND_FIELD_SETS = {
+  attraction: { price: true, hours: true, duration: true, location: true },
+  activity: { price: true, hours: true, duration: true, location: true },
+  restaurant: { price: true, hours: true, duration: false, location: true },
+  food: { price: true, hours: false, duration: false, location: false },
+  accommodation: { price: true, hours: false, duration: false, location: true },
+  transport: { price: true, hours: false, duration: true, location: false },
+  practical_info: { price: false, hours: false, duration: false, location: false },
+  note: { price: false, hours: false, duration: false, location: false },
+};
+
 function AddItemModal({ open, destinationId, sections, initialSectionId, onClose, onCreated }) {
   const [sectionId, setSectionId] = useState('');
   const [itemKind, setItemKind] = useState('note');
   const [title, setTitle] = useState('');
   const [priority, setPriority] = useState('');
   const [content, setContent] = useState('');
-  const [entryFee, setEntryFee] = useState('');
+  const [price, setPrice] = useState(null);
   const [openingHours, setOpeningHours] = useState('');
+  const [visitDuration, setVisitDuration] = useState('');
+  const [areaLocation, setAreaLocation] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -259,11 +297,12 @@ function AddItemModal({ open, destinationId, sections, initialSectionId, onClose
     if (open) {
       setSectionId(initialSectionId === null ? '' : (initialSectionId || ''));
       setItemKind(initialSectionId === null ? 'note' : 'attraction');
-      setTitle(''); setPriority(''); setContent(''); setEntryFee(''); setOpeningHours(''); setError('');
+      setTitle(''); setPriority(''); setContent(''); setPrice(null);
+      setOpeningHours(''); setVisitDuration(''); setAreaLocation(''); setError('');
     }
   }, [open, initialSectionId]);
 
-  const isTypedItem = itemKind !== 'note';
+  const fields = KIND_FIELD_SETS[itemKind] || KIND_FIELD_SETS.note;
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -277,8 +316,10 @@ function AddItemModal({ open, destinationId, sections, initialSectionId, onClose
         title,
         priority: priority || null,
         content: content || null,
-        entryFee: isTypedItem ? (entryFee || null) : null,
-        openingHours: isTypedItem ? (openingHours || null) : null,
+        price: fields.price ? price : null,
+        openingHours: fields.hours ? (openingHours || null) : null,
+        visitDurationMinutes: fields.duration && visitDuration ? parseInt(visitDuration) : null,
+        areaLocation: fields.location ? (areaLocation || null) : null,
       });
       onCreated(data.item);
     } catch (err) {
@@ -307,15 +348,70 @@ function AddItemModal({ open, destinationId, sections, initialSectionId, onClose
           <option value="optional">Optional</option>
           <option value="reference">Reference</option>
         </Select>
-        {isTypedItem && (
-          <>
-            <Input label="Entry fee" value={entryFee} onChange={e => setEntryFee(e.target.value)} placeholder="e.g. LKR 1500" />
-            <Input label="Opening hours" value={openingHours} onChange={e => setOpeningHours(e.target.value)} placeholder="e.g. 5:30 AM – 8:00 PM" />
-          </>
+        {fields.price && <PriceField value={price} onChange={setPrice} />}
+        {fields.hours && (
+          <Input label="Opening hours" value={openingHours} onChange={e => setOpeningHours(e.target.value)} placeholder="e.g. 5:30 AM – 8:00 PM" />
+        )}
+        {fields.duration && (
+          <Input label="Typical duration (minutes)" type="number" min="0" value={visitDuration} onChange={e => setVisitDuration(e.target.value)} />
+        )}
+        {fields.location && (
+          <Input label="Area / location" value={areaLocation} onChange={e => setAreaLocation(e.target.value)} />
         )}
         <TextArea label="Details" value={content} onChange={e => setContent(e.target.value)} placeholder="Description, notes, anything useful…" rows={5} />
         {error && <p className="dest-detail__form-error" role="alert">{error}</p>}
         <Button type="submit" fullWidth disabled={submitting}>{submitting ? 'Creating…' : 'Create'}</Button>
+      </form>
+    </Modal>
+  );
+}
+
+// Document/paste intake: pastes text, splits it into reviewable
+// candidates (see db/extraction/index.js), and hands off to the review
+// screen. Never writes a research_items row itself — see ItemReview.jsx.
+function ImportTextModal({ open, destinationId, onClose, onImported }) {
+  const [rawText, setRawText] = useState('');
+  const [sourceLabel, setSourceLabel] = useState('');
+  const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => { if (open) { setRawText(''); setSourceLabel(''); setError(''); } }, [open]);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setError('');
+    setSubmitting(true);
+    try {
+      const result = await intakeApi.create({ destinationId, rawText, sourceLabel: sourceLabel || null });
+      onImported(result.intake);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Modal open={open} onClose={onClose} title="Import from pasted text">
+      <form onSubmit={handleSubmit}>
+        <Input
+          label="Source (optional)"
+          value={sourceLabel}
+          onChange={e => setSourceLabel(e.target.value)}
+          placeholder="e.g. Lonely Planet article, a friend's notes"
+        />
+        <TextArea
+          label="Pasted text"
+          required
+          rows={10}
+          value={rawText}
+          onChange={e => setRawText(e.target.value)}
+          placeholder="Paste travel notes, an article, or anything else describing this destination…"
+          hint="This will be split into paragraphs for you to review and classify one by one — nothing is added to your research automatically."
+          autoFocus
+        />
+        {error && <p className="dest-detail__form-error" role="alert">{error}</p>}
+        <Button type="submit" fullWidth disabled={submitting}>{submitting ? 'Processing…' : 'Split into candidates'}</Button>
       </form>
     </Modal>
   );

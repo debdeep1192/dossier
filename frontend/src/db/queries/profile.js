@@ -1,5 +1,5 @@
-import { getDb } from '../index';
-import { isNonEmptyString, ValidationError } from './validate';
+import { getDb } from '../index.js';
+import { isNonEmptyString, ValidationError } from './validate.js';
 
 // owner_account holds a single local-profile row in this architecture —
 // no login, no session, no password. It exists purely so the app has a
@@ -8,7 +8,7 @@ import { isNonEmptyString, ValidationError } from './validate';
 
 export async function getProfile() {
   const db = await getDb();
-  const result = await db.query('SELECT id, display_name, created_at FROM owner_account LIMIT 1');
+  const result = await db.query('SELECT id, display_name, home_currency, created_at FROM owner_account LIMIT 1');
   return result.rows[0] || null;
 }
 
@@ -23,13 +23,13 @@ export async function createProfile({ displayName }) {
     // treat as an update rather than erroring, since there's no real
     // "conflict" concept for a single local profile.
     const result = await db.query(
-      'UPDATE owner_account SET display_name = $2, updated_at = now() WHERE id = $1 RETURNING id, display_name, created_at',
+      'UPDATE owner_account SET display_name = $2, updated_at = now() WHERE id = $1 RETURNING id, display_name, home_currency, created_at',
       [existing.rows[0].id, displayName ? displayName.trim() : null]
     );
     return result.rows[0];
   }
   const result = await db.query(
-    'INSERT INTO owner_account (display_name) VALUES ($1) RETURNING id, display_name, created_at',
+    'INSERT INTO owner_account (display_name) VALUES ($1) RETURNING id, display_name, home_currency, created_at',
     [displayName ? displayName.trim() : null]
   );
   return result.rows[0];
@@ -41,8 +41,20 @@ export async function updateProfile({ displayName }) {
   const existing = await db.query('SELECT id FROM owner_account LIMIT 1');
   if (existing.rows.length === 0) return createProfile({ displayName });
   const result = await db.query(
-    'UPDATE owner_account SET display_name = $2, updated_at = now() WHERE id = $1 RETURNING id, display_name, created_at',
+    'UPDATE owner_account SET display_name = $2, updated_at = now() WHERE id = $1 RETURNING id, display_name, home_currency, created_at',
     [existing.rows[0].id, displayName.trim()]
+  );
+  return result.rows[0];
+}
+
+export async function updateHomeCurrency(homeCurrency) {
+  if (!isNonEmptyString(homeCurrency)) throw new ValidationError('Home currency cannot be blank.');
+  const db = await getDb();
+  const existing = await db.query('SELECT id FROM owner_account LIMIT 1');
+  if (existing.rows.length === 0) throw new ValidationError('Set up your profile before changing home currency.');
+  const result = await db.query(
+    'UPDATE owner_account SET home_currency = $2, updated_at = now() WHERE id = $1 RETURNING id, display_name, home_currency, created_at',
+    [existing.rows[0].id, homeCurrency.trim().toUpperCase()]
   );
   return result.rows[0];
 }

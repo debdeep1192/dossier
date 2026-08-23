@@ -1,6 +1,7 @@
-export const ITEM_KINDS = ['attraction', 'hotel', 'restaurant', 'transport_option', 'practical_info', 'note'];
+export const ITEM_KINDS = ['attraction', 'activity', 'restaurant', 'food', 'accommodation', 'transport', 'practical_info', 'note'];
 export const PRIORITIES = ['must_know', 'useful', 'optional', 'reference'];
 export const SOURCE_TYPES = ['website', 'youtube', 'other'];
+export const CANDIDATE_STATUSES = ['pending_review', 'accepted', 'rejected'];
 
 export function isNonEmptyString(v) {
   return typeof v === 'string' && v.trim().length > 0;

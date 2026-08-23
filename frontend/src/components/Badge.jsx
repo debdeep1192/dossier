@@ -9,9 +9,11 @@ const PRIORITY_LABELS = {
 
 const ITEM_KIND_LABELS = {
   attraction: 'Attraction',
-  hotel: 'Hotel',
+  activity: 'Activity',
   restaurant: 'Restaurant',
-  transport_option: 'Transport',
+  food: 'Food',
+  accommodation: 'Accommodation',
+  transport: 'Transport',
   practical_info: 'Practical Info',
   note: 'Note',
 };

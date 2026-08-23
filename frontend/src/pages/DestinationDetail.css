@@ -157,6 +157,13 @@
   overflow: hidden;
 }
 
+.item-row__price {
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  margin: var(--space-1) 0 0;
+}
+
 @media (min-width: 900px) {
   .dest-detail__toc {
     flex-wrap: wrap;

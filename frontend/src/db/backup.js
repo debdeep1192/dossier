@@ -1,4 +1,4 @@
-import { getDb, resetSchema } from './index';
+import { getDb, resetSchema } from './index.js';
 
 // ============================================================
 // Backup export / import.
@@ -29,6 +29,8 @@ const TABLE_ORDER = [
   'research_item_tags',
   'sources',
   'research_item_relations',
+  'research_intake',
+  'research_candidates',
   'trips',
   'trip_destinations',
   'itinerary_days',

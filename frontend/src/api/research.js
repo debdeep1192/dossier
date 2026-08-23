@@ -7,6 +7,8 @@
 // and to leave a clean seam for any future sync work.
 import * as destinationQueries from '../db/queries/destinations';
 import * as itemQueries from '../db/queries/researchItems';
+import * as intakeQueries from '../db/queries/researchIntake';
+import * as profileQueries from '../db/queries/profile';
 
 export const destinationsApi = {
   list: async () => ({ destinations: await destinationQueries.listDestinations() }),
@@ -39,4 +41,22 @@ export const researchItemsApi = {
 
 export const tagsApi = {
   list: async () => ({ tags: await itemQueries.listTags() }),
+};
+
+export const intakeApi = {
+  create: async (data) => intakeQueries.createIntake(data),
+  get: async (id) => intakeQueries.getIntake(id),
+  listForDestination: async (destinationId) => ({ intakes: await intakeQueries.listIntakesForDestination(destinationId) }),
+};
+
+export const candidatesApi = {
+  update: async (id, data) => ({ candidate: await intakeQueries.updateCandidate(id, data) }),
+  accept: async (id, data) => ({ item: await intakeQueries.acceptCandidate(id, data) }),
+  reject: async (id) => { await intakeQueries.rejectCandidate(id); return { success: true }; },
+  resetToPending: async (id) => { await intakeQueries.resetCandidateToPending(id); return { success: true }; },
+};
+
+export const profileApi = {
+  get: async () => profileQueries.getProfile(),
+  updateHomeCurrency: async (homeCurrency) => profileQueries.updateHomeCurrency(homeCurrency),
 };

@@ -1,0 +1,25 @@
+.price-field {
+  margin-bottom: var(--space-4);
+}
+
+.price-field__label {
+  display: block;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  margin-bottom: var(--space-2);
+}
+
+.price-field__row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+}
+
+.price-field .field {
+  margin-bottom: var(--space-2);
+}
+
+.price-display {
+  font-weight: 600;
+}

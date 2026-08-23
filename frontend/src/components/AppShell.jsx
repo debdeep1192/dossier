@@ -10,8 +10,7 @@ const NAV_ITEMS = [
 
 // `children`, when provided, replaces the routed <Outlet /> content —
 // used by App.jsx's RootGate to show the real nav chrome immediately
-// during initial profile/DB loading (progressive render), before any
-// route has actually resolved.
+// during initial profile/DB loading, before any route has resolved.
 export default function AppShell({ children }) {
   return (
     <div className="app-shell">

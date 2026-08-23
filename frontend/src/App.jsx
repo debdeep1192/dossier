@@ -5,6 +5,7 @@ import WelcomePage from './pages/WelcomePage';
 import ResearchHome from './pages/ResearchHome';
 import DestinationDetail from './pages/DestinationDetail';
 import ItemDetail from './pages/ItemDetail';
+import ItemReview from './pages/ItemReview';
 import MorePage from './pages/MorePage';
 import PlaceholderPage from './pages/PlaceholderPage';
 import { LoadingState } from './components/States';
@@ -12,16 +13,13 @@ import { LoadingState } from './components/States';
 // First-run gate: no local profile yet -> WelcomePage. Profile exists ->
 // the normal app shell. This replaces the old server-auth RequireAuth/
 // AuthGate pair — "authenticated" becomes "hasProfile", "/auth" becomes
-// WelcomePage rendered in place (no separate route needed since there's
-// no login/logout to navigate back to).
+// WelcomePage rendered in place.
 //
-// Progressive render: AppShell (sidebar/nav chrome) needs no profile or
-// DB data to render, so it's shown immediately rather than replacing the
-// whole screen with a spinner while getDb()/getProfile() resolve
-// underneath — the person sees the actual app immediately instead of a
-// blank loading screen. Only the content area shows a loading state
-// while that resolves. This does not change how long PGlite itself
-// takes to initialize; it only avoids blocking paint on it.
+// Progressive render: AppShell's nav chrome needs no profile or DB data
+// to render, so it's shown immediately rather than replacing the whole
+// screen with a spinner while getDb()/getProfile() resolve underneath —
+// the app appears instantly instead of a blank loading screen. Only the
+// content area shows a loading state while that resolves.
 function RootGate() {
   const { loading, hasProfile } = useProfile();
   if (loading) {
@@ -45,6 +43,7 @@ export default function App() {
             <Route path="research" element={<ResearchHome />} />
             <Route path="research/:destinationId" element={<DestinationDetail />} />
             <Route path="research/:destinationId/items/:itemId" element={<ItemDetail />} />
+            <Route path="research/:destinationId/review/:intakeId" element={<ItemReview />} />
             <Route
               path="trips"
               element={

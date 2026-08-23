@@ -1,5 +1,5 @@
-import { getDb } from '../index';
-import { isNonEmptyString, isValidUUID, ValidationError, NotFoundError, ConflictError } from './validate';
+import { getDb } from '../index.js';
+import { isNonEmptyString, isValidUUID, ValidationError, NotFoundError, ConflictError } from './validate.js';
 
 export async function listDestinations() {
   const db = await getDb();
@@ -63,12 +63,14 @@ export async function getDestination(id) {
   const destResult = await db.query('SELECT * FROM destinations WHERE id = $1 AND deleted_at IS NULL', [id]);
   if (destResult.rows.length === 0) throw new NotFoundError('Destination not found.');
 
-  const sectionsResult = await db.query(
-    'SELECT * FROM sections WHERE destination_id = $1 ORDER BY sort_order ASC, name ASC', [id]
-  );
-  const itemsResult = await db.query(`
-    SELECT * FROM research_items WHERE destination_id = $1 AND deleted_at IS NULL ORDER BY title ASC
-  `, [id]);
+  // Independent reads — run in parallel rather than sequentially, since
+  // neither depends on the other's result. Small win locally, but real:
+  // this is the query DestinationDetail fires on every navigation into a
+  // destination, so it's worth not leaving latency on the table here.
+  const [sectionsResult, itemsResult] = await Promise.all([
+    db.query('SELECT * FROM sections WHERE destination_id = $1 ORDER BY sort_order ASC, name ASC', [id]),
+    db.query('SELECT * FROM research_items WHERE destination_id = $1 AND deleted_at IS NULL ORDER BY title ASC', [id]),
+  ]);
 
   return { destination: destResult.rows[0], sections: sectionsResult.rows, items: itemsResult.rows };
 }
@@ -99,29 +101,29 @@ export async function updateDestination(id, { name, overview }) {
 }
 
 // Soft-deletes a destination together with all of its (non-deleted)
-// research items, in one operation. This is deliberately NOT a hard
-// delete and does not introduce a move/recycle-bin workflow — it's the
-// same soft-delete mechanism deleteResearchItem() already uses, applied
-// to every item under the destination as well as the destination itself.
+// research items, in one operation. Not a hard delete, and no separate
+// move/recycle-bin workflow — this is the same soft-delete mechanism
+// deleteResearchItem() already uses, applied to every item under the
+// destination as well as the destination itself.
 //
 // Sections are left in place, physically unchanged (sections have no
-// deleted_at column — see schema.sql). This is safe rather than an
-// oversight: every existing read path (getDestinationDetail, list
-// queries, search) only ever reaches a destination's sections after
-// first confirming destinations.deleted_at IS NULL, so once the parent
-// destination is soft-deleted, its sections become permanently
-// unreachable through the app exactly like its items do — nothing is
-// orphaned or exposed inconsistently. Hard-deleting the sections here
-// isn't possible in the same step regardless, since
-// research_items.section_id is ON DELETE RESTRICT and the items still
-// physically exist (soft-deleted, not removed).
+// deleted_at column). This is safe rather than an oversight: every read
+// path (getDestination, list queries, search) only ever reaches a
+// destination's sections after first confirming
+// destinations.deleted_at IS NULL, so once the parent destination is
+// soft-deleted, its sections become permanently unreachable through the
+// app exactly like its items do — nothing is orphaned or exposed
+// inconsistently. Hard-deleting the sections in the same step isn't
+// possible regardless, since research_items.section_id is
+// ON DELETE RESTRICT and the items still physically exist (soft-deleted,
+// not removed).
 export async function deleteDestination(id) {
   if (!isValidUUID(id)) throw new ValidationError('invalid_id');
   const db = await getDb();
   const existing = await db.query('SELECT id FROM destinations WHERE id = $1 AND deleted_at IS NULL', [id]);
   if (existing.rows.length === 0) throw new NotFoundError('not_found');
   await db.query(
-    'UPDATE research_items SET deleted_at = now() WHERE destination_id = $1 AND deleted_at IS NULL',
+    'UPDATE research_items SET deleted_at = now(), section_id = NULL WHERE destination_id = $1 AND deleted_at IS NULL',
     [id]
   );
   await db.query('UPDATE destinations SET deleted_at = now() WHERE id = $1', [id]);

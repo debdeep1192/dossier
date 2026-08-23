@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { destinationsApi, researchItemsApi } from '../api/research';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
+import { useCachedQuery, invalidateCachedQuery } from '../hooks/useCachedQuery';
 import SearchBar from '../components/SearchBar';
 import Card from '../components/Card';
 import Button from '../components/Button';
@@ -13,9 +14,7 @@ import './ResearchHome.css';
 
 export default function ResearchHome() {
   const navigate = useNavigate();
-  const [destinations, setDestinations] = useState(null);
-  const [recentItems, setRecentItems] = useState(null);
-  const [error, setError] = useState(null);
+  const [deleteError, setDeleteError] = useState('');
 
   const [query, setQuery] = useState('');
   const debouncedQuery = useDebouncedValue(query, 300);
@@ -23,45 +22,18 @@ export default function ResearchHome() {
   const [searching, setSearching] = useState(false);
 
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [deleteError, setDeleteError] = useState('');
 
-  const loadAll = useCallback(async () => {
-    setError(null);
-    try {
-      const [destData, recentData] = await Promise.all([
-        destinationsApi.list(),
-        destinationsApi.recentlyUpdated(6),
-      ]);
-      setDestinations(destData.destinations);
-      setRecentItems(recentData.items);
-    } catch (e) {
-      setError(e.message);
-    }
+  const fetcher = useCallback(async () => {
+    const [destData, recentData] = await Promise.all([
+      destinationsApi.list(),
+      destinationsApi.recentlyUpdated(6),
+    ]);
+    return { destinations: destData.destinations, recentItems: recentData.items };
   }, []);
-
-  useEffect(() => { loadAll(); }, [loadAll]);
-
-  async function handleDeleteItem(item) {
-    if (!window.confirm(`Remove "${item.title}" from your research? It will be moved to trash rather than permanently deleted.`)) return;
-    await researchItemsApi.remove(item.id);
-    // Item rows can currently be showing in either the Recently Updated
-    // list or the search results list (never both at once, per
-    // isSearchMode) — update whichever is active so the row disappears
-    // immediately without a full reload.
-    setRecentItems(prev => prev ? prev.filter(i => i.id !== item.id) : prev);
-    setSearchResults(prev => prev ? prev.filter(i => i.id !== item.id) : prev);
-  }
-
-  async function handleDeleteDestination(destination) {
-    if (!window.confirm(`Delete "${destination.name}" and everything in it? This includes ${destination.item_count} research item${destination.item_count === '1' ? '' : 's'}. It will be moved to trash rather than permanently deleted.`)) return;
-    setDeleteError('');
-    try {
-      await destinationsApi.remove(destination.id);
-      setDestinations(prev => prev.filter(d => d.id !== destination.id));
-    } catch (e) {
-      setDeleteError(e.message);
-    }
-  }
+  // Single cache key for the whole home screen — it's one screen's worth
+  // of data fetched together, so one key is simpler than two and avoids
+  // any risk of the two lists getting out of sync in the cache.
+  const { data, error, refresh } = useCachedQuery('research-home', fetcher);
 
   useEffect(() => {
     if (!debouncedQuery.trim()) {
@@ -75,10 +47,31 @@ export default function ResearchHome() {
       .finally(() => setSearching(false));
   }, [debouncedQuery]);
 
-  if (error) return <ErrorState description={error} onRetry={loadAll} />;
-  if (destinations === null) return <LoadingState label="Loading your research library…" />;
+  if (error && !data) return <ErrorState description={error} onRetry={refresh} />;
+  if (!data) return <LoadingState label="Loading your research library…" />;
 
+  const { destinations, recentItems } = data;
   const isSearchMode = query.trim().length > 0;
+
+  async function handleDeleteItem(item) {
+    if (!window.confirm(`Remove "${item.title}" from your research? It will be moved to trash rather than permanently deleted.`)) return;
+    await researchItemsApi.remove(item.id);
+    setSearchResults(prev => prev ? prev.filter(i => i.id !== item.id) : prev);
+    invalidateCachedQuery('research-home');
+    refresh();
+  }
+
+  async function handleDeleteDestination(destination) {
+    if (!window.confirm(`Delete "${destination.name}" and everything in it? This includes ${destination.item_count} research item${destination.item_count === '1' ? '' : 's'}. It will be moved to trash rather than permanently deleted.`)) return;
+    setDeleteError('');
+    try {
+      await destinationsApi.remove(destination.id);
+      invalidateCachedQuery('research-home');
+      refresh();
+    } catch (e) {
+      setDeleteError(e.message);
+    }
+  }
 
   return (
     <div className="research-home">
@@ -138,7 +131,12 @@ export default function ResearchHome() {
             ) : (
               <div className="research-home__destination-grid">
                 {destinations.map(dest => (
-                  <DestinationCard key={dest.id} destination={dest} onClick={() => navigate(`/research/${dest.id}`)} onDelete={() => handleDeleteDestination(dest)} />
+                  <DestinationCard
+                    key={dest.id}
+                    destination={dest}
+                    onClick={() => navigate(`/research/${dest.id}`)}
+                    onDelete={() => handleDeleteDestination(dest)}
+                  />
                 ))}
               </div>
             )}
@@ -149,7 +147,7 @@ export default function ResearchHome() {
       <CreateDestinationModal
         open={showCreateModal}
         onClose={() => setShowCreateModal(false)}
-        onCreated={(dest) => { setShowCreateModal(false); navigate(`/research/${dest.id}`); }}
+        onCreated={(dest) => { setShowCreateModal(false); invalidateCachedQuery('research-home'); navigate(`/research/${dest.id}`); }}
       />
     </div>
   );
