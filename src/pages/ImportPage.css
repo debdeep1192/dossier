@@ -1,0 +1,4 @@
+.import-page__hint {
+  color: var(--color-text-secondary);
+  margin: var(--space-2) 0 var(--space-5);
+}

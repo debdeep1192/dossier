@@ -1,0 +1,19 @@
+.money-field { margin-bottom: var(--space-4); }
+
+.money-field__label {
+  display: block;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin-bottom: var(--space-2);
+}
+
+.money-field__row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+}
+
+.money-field .field { margin-bottom: var(--space-2); }
+
+.money-display { font-weight: 600; }
