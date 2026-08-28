@@ -12,6 +12,7 @@ import { listPracticalInfoEntries } from './db/stores/practicalInfo.js';
 import { listWeatherNotes } from './db/stores/weatherNotes.js';
 import { listPackingNotes } from './db/stores/packingNotes.js';
 import { listGeneralNotes } from './db/stores/generalNotes.js';
+import { listShoppingItems } from './db/stores/shoppingItems.js';
 import { listSources } from './db/stores/sources.js';
 
 export const SECTIONS = [
@@ -23,6 +24,7 @@ export const SECTIONS = [
   { key: 'practicalInfo', label: 'Practical Info', icon: '🛂', path: 'practical-info', list: listPracticalInfoEntries },
   { key: 'weatherNotes', label: 'Weather & Best Time', icon: '☀️', path: 'weather', list: listWeatherNotes },
   { key: 'packingNotes', label: 'Packing & Preparation', icon: '🎒', path: 'packing', list: listPackingNotes },
+  { key: 'shoppingItems', label: 'Shopping', icon: '🛍️', path: 'shopping', list: listShoppingItems },
   { key: 'generalNotes', label: 'General Notes', icon: '📝', path: 'notes', list: listGeneralNotes },
   { key: 'sources', label: 'Sources & References', icon: '🔗', path: 'sources', list: listSources },
 ];

@@ -12,6 +12,8 @@ import { PriorityBadge } from '../../components/Badge';
 import { PlaceField, PlaceSummary } from '../../components/Place';
 import { MoneyField, MoneyDisplay } from '../../components/Money';
 import { EmptyState, LoadingState, ErrorState } from '../../components/States';
+import { getCurrencyOptions, addDestinationCurrency } from '../../db/currency.js';
+import { RESTAURANT_PRICE_UNITS, RESTAURANT_DEFAULT_UNIT } from '../../lib/priceUnits.js';
 
 export default function RestaurantsPage() {
   const { destinationId } = useParams();
@@ -39,6 +41,13 @@ export default function RestaurantsPage() {
   if (loading && !data) return <LoadingState label="Loading restaurants & food…" />;
 
   const { destination, items } = data;
+  const currencies = getCurrencyOptions(destination);
+
+  async function handleAddCurrency(code) {
+    await addDestinationCurrency(destinationId, code);
+    invalidateCachedQuery(`destination:${destinationId}`);
+    refresh();
+  }
 
   return (
     <SectionPageLayout destination={destination} destinationId={destinationId} title="Restaurants & Food" onAdd={() => setEditing({})}>
@@ -62,13 +71,13 @@ export default function RestaurantsPage() {
       )}
 
       {editing !== null && (
-        <RestaurantForm destinationId={destinationId} record={editing.id ? editing : null} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); afterMutation(); }} />
+        <RestaurantForm destinationId={destinationId} record={editing.id ? editing : null} currencies={currencies} onAddCurrency={handleAddCurrency} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); afterMutation(); }} />
       )}
     </SectionPageLayout>
   );
 }
 
-function RestaurantForm({ destinationId, record, onClose, onSaved }) {
+function RestaurantForm({ destinationId, record, currencies, onAddCurrency, onClose, onSaved }) {
   const base = record || emptyRestaurantEntry();
   const [hasPlace, setHasPlace] = useState(Boolean(base.place && base.place.name));
   const [place, setPlace] = useState(base.place || {});
@@ -116,7 +125,7 @@ function RestaurantForm({ destinationId, record, onClose, onSaved }) {
           <Input label="Dish / food note name" required value={dishName} onChange={e => setDishName(e.target.value)} placeholder="e.g. Hoppers" />
         )}
         <Input label="Cuisine" value={cuisine} onChange={e => setCuisine(e.target.value)} />
-        <MoneyField value={price} onChange={setPrice} />
+        <MoneyField value={price} onChange={setPrice} currencies={currencies} defaultCurrency="INR" unitOptions={RESTAURANT_PRICE_UNITS} defaultUnit={RESTAURANT_DEFAULT_UNIT} onAddCurrency={onAddCurrency} />
         <Input label="Must-try dishes (comma separated)" value={mustTryDishes} onChange={e => setMustTryDishes(e.target.value)} />
         <TextArea label="Dietary notes" value={dietaryNotes} onChange={e => setDietaryNotes(e.target.value)} rows={2} />
         <Select label="Priority" value={priority} onChange={e => setPriority(e.target.value)}>

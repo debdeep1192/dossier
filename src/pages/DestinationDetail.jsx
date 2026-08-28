@@ -41,6 +41,7 @@ export default function DestinationDetail() {
 
       <div className="dest-detail__actions">
         <Button variant="secondary" size="sm" onClick={() => navigate(`/destinations/${destinationId}/import`)}>+ Import from text</Button>
+        <Button variant="ghost" size="sm" onClick={() => navigate(`/destinations/${destinationId}/currency`)}>Currency settings</Button>
       </div>
 
       <div className="dest-detail__section-grid">

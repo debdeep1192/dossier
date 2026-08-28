@@ -14,6 +14,7 @@ import { createPracticalInfoEntry } from './practicalInfo.js';
 import { createWeatherNote } from './weatherNotes.js';
 import { createPackingNote } from './packingNotes.js';
 import { createGeneralNote } from './generalNotes.js';
+import { createShoppingItem } from './shoppingItems.js';
 
 const CREATORS = {
   attractions: createAttraction,
@@ -25,6 +26,7 @@ const CREATORS = {
   weatherNotes: createWeatherNote,
   packingNotes: createPackingNote,
   generalNotes: createGeneralNote,
+  shoppingItems: createShoppingItem,
 };
 
 const INTAKE_STORE = 'intakeDocuments';

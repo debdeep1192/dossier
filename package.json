@@ -8,9 +8,12 @@
     "build": "vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test": "node src/db/__tests__/foundation.test.js"
+    "test": "node src/db/__tests__/foundation.test.js",
+    "test:pdf": "node src/db/__tests__/pdf.test.js",
+    "test:all": "npm test && npm run test:pdf"
   },
   "dependencies": {
+    "pdfjs-dist": "^6.2.108",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-router-dom": "^7.18.2"

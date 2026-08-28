@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import { getDestination } from '../../db/stores/destinations';
 import { listAccommodations, createAccommodation, updateAccommodation, deleteAccommodation, emptyAccommodation } from '../../db/stores/accommodations';
+import { getCurrencyOptions, addDestinationCurrency } from '../../db/currency.js';
 import { useCachedQuery, invalidateCachedQuery, invalidateCachedQueryPrefix } from '../../hooks/useCachedQuery';
 import SectionPageLayout from '../../components/SectionPageLayout';
 import Card from '../../components/Card';
@@ -12,6 +13,7 @@ import { PriorityBadge } from '../../components/Badge';
 import { PlaceField, PlaceSummary } from '../../components/Place';
 import { MoneyField, MoneyDisplay } from '../../components/Money';
 import { EmptyState, LoadingState, ErrorState } from '../../components/States';
+import { ACCOMMODATION_TYPES, ACCOMMODATION_PRICE_BASIS, ACCOMMODATION_DEFAULT_PRICE_BASIS } from '../../lib/priceUnits.js';
 
 export default function AccommodationsPage() {
   const { destinationId } = useParams();
@@ -29,6 +31,12 @@ export default function AccommodationsPage() {
     refresh();
   }
 
+  async function handleAddCurrency(code) {
+    await addDestinationCurrency(destinationId, code);
+    invalidateCachedQuery(`destination:${destinationId}`);
+    refresh();
+  }
+
   async function handleDelete(item) {
     if (!window.confirm(`Delete "${item.place?.name || 'this entry'}"?`)) return;
     await deleteAccommodation(item.id);
@@ -39,6 +47,7 @@ export default function AccommodationsPage() {
   if (loading && !data) return <LoadingState label="Loading accommodation…" />;
 
   const { destination, items } = data;
+  const currencies = getCurrencyOptions(destination);
 
   return (
     <SectionPageLayout destination={destination} destinationId={destinationId} title="Accommodation" onAdd={() => setEditing({})}>
@@ -61,13 +70,13 @@ export default function AccommodationsPage() {
       )}
 
       {editing !== null && (
-        <AccommodationForm destinationId={destinationId} record={editing.id ? editing : null} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); afterMutation(); }} />
+        <AccommodationForm destinationId={destinationId} record={editing.id ? editing : null} currencies={currencies} onAddCurrency={handleAddCurrency} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); afterMutation(); }} />
       )}
     </SectionPageLayout>
   );
 }
 
-function AccommodationForm({ destinationId, record, onClose, onSaved }) {
+function AccommodationForm({ destinationId, record, currencies, onAddCurrency, onClose, onSaved }) {
   const base = record || emptyAccommodation();
   const [place, setPlace] = useState(base.place || {});
   const [accommodationType, setAccommodationType] = useState(base.accommodationType || '');
@@ -101,8 +110,20 @@ function AccommodationForm({ destinationId, record, onClose, onSaved }) {
     <Modal open onClose={onClose} title={record ? 'Edit Accommodation' : 'New Accommodation'}>
       <form onSubmit={handleSubmit}>
         <PlaceField value={place} onChange={setPlace} />
-        <Input label="Type" value={accommodationType} onChange={e => setAccommodationType(e.target.value)} placeholder="e.g. hotel, guesthouse, homestay" />
-        <MoneyField label="Price per night" value={price} onChange={setPrice} />
+        <Select label="Type" value={accommodationType} onChange={e => setAccommodationType(e.target.value)}>
+          <option value="">Choose a type…</option>
+          {ACCOMMODATION_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+        </Select>
+        <MoneyField
+          label="Price"
+          value={price}
+          onChange={setPrice}
+          currencies={currencies}
+          defaultCurrency="INR"
+          unitOptions={ACCOMMODATION_PRICE_BASIS}
+          defaultUnit={ACCOMMODATION_DEFAULT_PRICE_BASIS}
+          onAddCurrency={onAddCurrency}
+        />
         <Input label="Room type" value={roomType} onChange={e => setRoomType(e.target.value)} />
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-2)' }}>
           <Input label="Check-in" value={checkIn} onChange={e => setCheckIn(e.target.value)} placeholder="e.g. 2 PM" />

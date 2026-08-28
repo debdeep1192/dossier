@@ -11,7 +11,9 @@ import PracticalInfoPage from './pages/sections/PracticalInfoPage';
 import WeatherPage from './pages/sections/WeatherPage';
 import PackingPage from './pages/sections/PackingPage';
 import GeneralNotesPage from './pages/sections/GeneralNotesPage';
+import ShoppingPage from './pages/ShoppingPage';
 import SourcesPage from './pages/SourcesPage';
+import CurrencySettingsPage from './pages/CurrencySettingsPage';
 import ImportPage from './pages/ImportPage';
 import ReviewPage from './pages/ReviewPage';
 
@@ -36,7 +38,9 @@ export default function App() {
           <Route path="/destinations/:destinationId/weather" element={<WeatherPage />} />
           <Route path="/destinations/:destinationId/packing" element={<PackingPage />} />
           <Route path="/destinations/:destinationId/notes" element={<GeneralNotesPage />} />
+          <Route path="/destinations/:destinationId/shopping" element={<ShoppingPage />} />
           <Route path="/destinations/:destinationId/sources" element={<SourcesPage />} />
+          <Route path="/destinations/:destinationId/currency" element={<CurrencySettingsPage />} />
           <Route path="/destinations/:destinationId/import" element={<ImportPage />} />
           <Route path="/destinations/:destinationId/review/:intakeId" element={<ReviewPage />} />
         </Routes>

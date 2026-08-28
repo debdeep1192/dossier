@@ -17,3 +17,14 @@
 .money-field .field { margin-bottom: var(--space-2); }
 
 .money-display { font-weight: 600; }
+
+.money-field__add-btn {
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface-sage);
+  border-radius: var(--radius-md);
+  padding: 0 var(--space-3);
+  font-weight: 600;
+  font-size: var(--text-sm);
+  cursor: pointer;
+  color: var(--color-teal-dark);
+}

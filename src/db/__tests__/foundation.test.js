@@ -12,10 +12,16 @@ import { createDestination, deleteDestination, getDestination } from '../stores/
 import { createAttraction, listAttractions, updateAttraction, deleteAttraction } from '../stores/attractions.js';
 import { createRestaurantEntry, isPlaceBased } from '../stores/restaurants.js';
 import { createTransportEntry, listTransportEntries } from '../stores/transport.js';
-import { createCostEntry } from '../stores/costs.js';
+import { createCostEntry, getCostEntry } from '../stores/costs.js';
 import { createIntake, getIntake, updateCandidate, acceptCandidate, rejectCandidate, resetCandidateToPending } from '../stores/intake.js';
 import { extractCandidates, extractPriceFromText } from '../extraction.js';
 import { buildGoogleMapsUrl } from '../../lib/googleMaps.js';
+import { createAccommodation } from '../stores/accommodations.js';
+import { createWeatherNote, normalizeWeatherNote } from '../stores/weatherNotes.js';
+import { emptyFeeBand, formatFeeBands } from '../../lib/feeBands.js';
+import { formatOpeningHours } from '../../lib/openingHours.js';
+import { CORE_CURRENCIES, getCurrencyOptions, addDestinationCurrency, setExchangeRate, getExchangeRate, convertAmount } from '../currency.js';
+import { createShoppingItem } from '../stores/shoppingItems.js';
 
 let passed = 0, failed = 0;
 async function test(name, fn) {
@@ -123,11 +129,62 @@ await test('recognizes a heading and classifies subsequent list items', () => {
   assert.equal(attractionCandidates[0].proposedFields.price.currency, 'LKR');
 });
 
-await test('text with no heading match leaves candidates unclassified, not guessed', () => {
-  const candidates = extractCandidates('Some random travel musings with no clear structure at all here.');
+await test('a plain narrative paragraph (no bullet) never becomes a candidate, even under a matching heading', () => {
+  const text = 'Attractions\nThe guide is explicitly built around a relaxed pace, giving travellers time to enjoy the town without rushing between sights.';
+  const candidates = extractCandidates(text);
+  assert.equal(candidates.length, 0, 'a narrative paragraph must never become a candidate, regardless of heading');
+});
+
+await test('a bulleted line with no heading match is surfaced as unclassified, not guessed or dropped', () => {
+  const candidates = extractCandidates('- Some bulleted fact with no heading above it');
   assert.equal(candidates.length, 1);
   assert.equal(candidates[0].proposedSection, null);
   assert.ok(candidates[0].uncertaintyNote);
+});
+
+console.log('\n5a. Extraction false-positive protection (realistic Darjeeling-style document)');
+await test('conservative extraction rejects narrative/itinerary/meta content while keeping real bulleted attractions', () => {
+  const doc = [
+    'Darjeeling Travel Guide',
+    '',
+    'This guide is explicitly built around a relaxed, family-friendly pace through the hills.',
+    '',
+    'Day 1',
+    '- 08:00–09:30 Breakfast at the hotel',
+    '- 10:00 Depart for Tiger Hill',
+    '',
+    'Attractions',
+    '- Tiger Hill',
+    '- Batasia Loop',
+    '- Japanese Peace Pagoda',
+    '- Lloyd\'s Botanical Garden',
+    '- Observatory Hill',
+    '',
+    'Shopping commentary: Darjeeling tea is world famous and makes a wonderful gift for friends and family back home, especially the first-flush variety.',
+    '',
+    '---',
+    '',
+    'Closing note from the original document: this itinerary was compiled from multiple sources and may need verification before travel.',
+  ].join('\n');
+
+  const candidates = extractCandidates(doc);
+  const attractionNames = candidates.filter(c => c.proposedSection === 'attractions').map(c => c.sourceExcerpt);
+
+  assert.deepEqual(
+    attractionNames.sort(),
+    ['Batasia Loop', 'Japanese Peace Pagoda', "Lloyd's Botanical Garden", 'Observatory Hill', 'Tiger Hill'].sort(),
+    'real bulleted attractions should all be recognized'
+  );
+
+  // None of the narrative/itinerary/meta lines should appear as a
+  // candidate under ANY section, unclassified included.
+  const allExcerpts = candidates.map(c => c.sourceExcerpt);
+  assert.ok(!allExcerpts.some(t => t.includes('explicitly built around')), 'intro narrative must not become a candidate');
+  assert.ok(!allExcerpts.some(t => t.includes('Breakfast at the hotel')), 'itinerary/schedule lines must not become a candidate');
+  assert.ok(!allExcerpts.some(t => t.includes('Depart for Tiger Hill')), 'itinerary/schedule lines must not become a candidate');
+  assert.ok(!allExcerpts.some(t => t.includes('Shopping commentary')), 'narrative commentary paragraph must not become a candidate');
+  assert.ok(!allExcerpts.some(t => t.includes('Closing note from the original document')), 'document meta-commentary must not become a candidate');
+  assert.ok(!allExcerpts.some(t => t === '---'), 'separator lines must never become a candidate');
 });
 
 await test('extractPriceFromText recognizes free and currency+amount, ignores plain numbers', () => {
@@ -161,7 +218,7 @@ await test('accept writes into the real section store via the same creator manua
 
   const record = await acceptCandidate(candidate.id, {
     section: 'attractions',
-    sectionFields: { place: { name: 'Sigiriya' }, category: '', description: '', price: null },
+    sectionFields: { place: { name: 'Sigiriya' }, category: '', description: '', feeBands: [], cameraCharge: null, videographyCharge: null, openingHours: [], typicallySpent: '', bestTimeOfDay: { option: '', note: '' } },
   });
   assert.equal(record.place.name, 'Sigiriya');
   assert.equal(record.provenance, 'imported');
@@ -191,7 +248,7 @@ await test('reject and undo (reset to pending) work; accepted cannot be reset', 
 
   const record = await acceptCandidate(candidates[1].id, {
     section: 'attractions',
-    sectionFields: { place: { name: 'Galle Fort' }, category: '', description: '', price: null },
+    sectionFields: { place: { name: 'Galle Fort' }, category: '', description: '', feeBands: [], cameraCharge: null, videographyCharge: null, openingHours: [], typicallySpent: '', bestTimeOfDay: { option: '', note: '' } },
   });
   assert.ok(record.id);
   await assert.rejects(() => resetCandidateToPending(candidates[1].id), /already became a research record/);
@@ -210,7 +267,7 @@ await test('manually-created and candidate-accepted attractions share the same s
   const { candidates } = await createIntake({ destinationId: dest.id, rawText: 'Attractions\n- Imported Place' });
   const accepted = await acceptCandidate(candidates[0].id, {
     section: 'attractions',
-    sectionFields: { place: { name: 'Imported Place' }, category: '', description: '', price: null },
+    sectionFields: { place: { name: 'Imported Place' }, category: '', description: '', feeBands: [], cameraCharge: null, videographyCharge: null, openingHours: [], typicallySpent: '', bestTimeOfDay: { option: '', note: '' } },
   });
   assert.equal(
     Object.keys(manual).sort().join(','),
@@ -237,6 +294,205 @@ await test('data survives resetting the in-memory db singleton (simulates a page
   const items = await listAttractions(dest.id);
   assert.equal(items.length, 1, 'attraction should still be present after simulated reload');
   assert.equal(items[0].place.name, 'Some Fort');
+});
+
+console.log('\n8. Multi-band attraction fees');
+await test('multiple fee bands with different age ranges and statuses are preserved distinctly', async () => {
+  await __resetDbForTest();
+  globalThis.indexedDB = new (await import('fake-indexeddb')).IDBFactory();
+  const dest = await createDestination({ name: 'Test' });
+  const feeBands = [
+    { ...emptyFeeBand(), label: 'Adult', minAge: 13, maxAge: '', status: 'paid', amount: 100, currency: 'INR' },
+    { ...emptyFeeBand(), label: 'Child', minAge: 5, maxAge: 12, status: 'paid', amount: 50, currency: 'INR' },
+    { ...emptyFeeBand(), label: 'Young child', minAge: 0, maxAge: 4, status: 'free', amount: '', currency: '' },
+  ];
+  const item = await createAttraction(dest.id, { place: { name: 'Test Fort' }, feeBands });
+  assert.equal(item.feeBands.length, 3);
+  assert.equal(item.feeBands[0].label, 'Adult');
+  assert.equal(item.feeBands[0].amount, 100);
+  assert.equal(item.feeBands[1].maxAge, 12);
+  assert.equal(item.feeBands[2].status, 'free');
+
+  const formatted = formatFeeBands(item.feeBands);
+  assert.ok(formatted.includes('Adult'));
+  assert.ok(formatted.includes('Child'));
+  assert.ok(formatted.includes('Free') || formatted.includes('Young child'));
+});
+
+await test('a single simple fee (no bands needed) stays simple', async () => {
+  const dest = await createDestination({ name: 'Test' });
+  const item = await createAttraction(dest.id, { place: { name: 'Free Park' }, feeBands: [{ ...emptyFeeBand(), status: 'free' }] });
+  assert.equal(formatFeeBands(item.feeBands), 'Free');
+});
+
+console.log('\n9. Camera / videography charges');
+await test('camera and videography charges are separate optional Money fields', async () => {
+  const dest = await createDestination({ name: 'Test' });
+  const item = await createAttraction(dest.id, {
+    place: { name: 'Museum' },
+    cameraCharge: { amount: 50, currency: 'INR', unit: 'per camera', note: '' },
+    videographyCharge: { amount: 100, currency: 'INR', unit: '', note: '' },
+  });
+  assert.equal(item.cameraCharge.amount, 50);
+  assert.equal(item.videographyCharge.amount, 100);
+  assert.equal(item.cameraCharge.unit, 'per camera');
+});
+
+console.log('\n10. Opening-hour periods');
+await test('split hours and per-day groups are represented distinctly', async () => {
+  const dest = await createDestination({ name: 'Test' });
+  const openingHours = [
+    { id: 'g1', days: ['daily'], ranges: [{ start: '06:00', end: '12:00' }, { start: '17:00', end: '21:00' }] },
+  ];
+  const item = await createAttraction(dest.id, { place: { name: 'Temple' }, openingHours });
+  assert.equal(item.openingHours[0].ranges.length, 2, 'split hours (two ranges in one day-group) should be preserved');
+  const formatted = formatOpeningHours(item.openingHours);
+  assert.ok(formatted.includes('06:00'));
+  assert.ok(formatted.includes('17:00'));
+});
+
+await test('different hours on different days are supported via multiple groups', async () => {
+  const openingHours = [
+    { id: 'g1', days: ['mon', 'tue', 'wed', 'thu', 'fri'], ranges: [{ start: '09:00', end: '17:00' }] },
+    { id: 'g2', days: ['sat', 'sun'], ranges: [{ start: '10:00', end: '14:00' }] },
+  ];
+  const formatted = formatOpeningHours(openingHours);
+  assert.ok(formatted.includes('|'), 'multiple day-groups should both appear in the formatted output');
+});
+
+console.log('\n11. Transport and accommodation pricing units');
+await test('transport supports per-vehicle pricing for a private hired cab', async () => {
+  const dest = await createDestination({ name: 'Test' });
+  const item = await createTransportEntry(dest.id, {
+    from: { label: 'Kolkata', place: null },
+    to: { label: 'Darjeeling', place: null },
+    mode: 'Private hired cab',
+    price: { amount: 8000, currency: 'INR', unit: 'Per vehicle', note: '' },
+  });
+  assert.equal(item.price.unit, 'Per vehicle');
+  assert.equal(item.price.amount, 8000);
+});
+
+await test('accommodation price basis distinguishes per-room vs per-person', async () => {
+  const dest = await createDestination({ name: 'Test' });
+  const item = await createAccommodation(dest.id, {
+    place: { name: 'Hotel X' },
+    accommodationType: 'Hotel / Resort',
+    price: { amount: 3000, currency: 'INR', unit: 'Per room per night', note: '' },
+  });
+  assert.equal(item.price.unit, 'Per room per night');
+});
+
+console.log('\n12. Weather structured selections');
+await test('temperature range, rain, snow, and recommendation are structured and independent', async () => {
+  const dest = await createDestination({ name: 'Test' });
+  const item = await createWeatherNote(dest.id, {
+    period: 'December–February',
+    temperatureMin: 8, temperatureMax: 18, temperatureUnit: 'C',
+    rain: 'Rare', snow: 'Moderate', recommendation: 'excellent', recommendationNotes: 'Clear skies, great visibility',
+  });
+  assert.equal(item.temperatureMin, 8);
+  assert.equal(item.temperatureMax, 18);
+  assert.equal(item.snow, 'Moderate');
+  assert.equal(item.recommendation, 'excellent');
+});
+
+await test('legacy free-text recommendation is normalized into recommendationNotes without data loss', () => {
+  const legacyRecord = { period: 'June', recommendation: 'Great time to visit, dry and clear' };
+  const normalized = normalizeWeatherNote(legacyRecord);
+  assert.equal(normalized.recommendation, '', 'non-enum legacy value should be cleared from the structured field');
+  assert.equal(normalized.recommendationNotes, 'Great time to visit, dry and clear', 'legacy text should be preserved, not discarded');
+});
+
+console.log('\n13. Currency system — original values, INR/USD always available, exchange rates');
+await test('INR and USD are always in the currency options regardless of what a destination has stored', () => {
+  assert.deepEqual(getCurrencyOptions({ currencies: [] }), CORE_CURRENCIES);
+  assert.deepEqual(getCurrencyOptions(null), CORE_CURRENCIES);
+  const withExtra = getCurrencyOptions({ currencies: ['THB'] });
+  assert.ok(withExtra.includes('INR') && withExtra.includes('USD') && withExtra.includes('THB'));
+});
+
+await test('adding a destination currency persists and is idempotent for core currencies', async () => {
+  const dest = await createDestination({ name: 'Thailand Trip' });
+  const updated = await addDestinationCurrency(dest.id, 'thb');
+  assert.deepEqual(updated.currencies, ['THB'], 'currency code should be normalized to uppercase');
+  const again = await addDestinationCurrency(dest.id, 'INR'); // core currency, should be a no-op
+  assert.deepEqual(again.currencies, ['THB'], 'adding a core currency should not duplicate it into the stored list');
+});
+
+await test('exchange rate changes never modify an already-saved research record\'s original amount/currency', async () => {
+  const dest = await createDestination({ name: 'Thailand' });
+  const item = await createCostEntry(dest.id, { item: 'Hotel deposit', price: { amount: 1200, currency: 'THB', unit: '', note: '' } });
+
+  await setExchangeRate('THB', 'INR', 2.65);
+  const rate1 = await getExchangeRate('THB', 'INR');
+  assert.equal(rate1, 2.65);
+  const converted1 = await convertAmount(item.price.amount, 'THB', 'INR');
+  assert.ok(Math.abs(converted1 - 3180) < 0.01);
+
+  // Change the rate — the ORIGINAL research record must be untouched.
+  await setExchangeRate('THB', 'INR', 3.0);
+  const itemAfterRateChange = await getCostEntry(item.id);
+  assert.equal(itemAfterRateChange.price.amount, 1200, 'original amount must never change when an exchange rate changes');
+  assert.equal(itemAfterRateChange.price.currency, 'THB', 'original currency must never change when an exchange rate changes');
+
+  const converted2 = await convertAmount(item.price.amount, 'THB', 'INR');
+  assert.ok(Math.abs(converted2 - 3600) < 0.01, 'the DISPLAYED conversion should reflect the new rate');
+});
+
+await test('an inverse rate can be derived when only one direction was recorded', async () => {
+  await setExchangeRate('USD', 'INR', 84);
+  const inverse = await getExchangeRate('INR', 'USD');
+  assert.ok(Math.abs(inverse - (1 / 84)) < 0.0001);
+});
+
+await test('convertAmount returns null (never a guess) when no rate is on file', async () => {
+  const result = await convertAmount(100, 'VND', 'USD');
+  assert.equal(result, null);
+});
+
+console.log('\n14. Database version upgrade (v1 -> v2) preserves existing data');
+await test('opening a v1 database with v2 code adds new stores without touching existing data', async () => {
+  // Simulate a v1 database: open directly at version 1 with only the
+  // original stores, seed a real destination, then close it. (The
+  // test() wrapper has already given us a fresh globalThis.indexedDB
+  // for this test — reuse it, don't replace it.)
+  const v1Db = await new Promise((resolve, reject) => {
+    const req = globalThis.indexedDB.open('dossier', 1);
+    req.onupgradeneeded = (event) => {
+      const db = event.target.result;
+      for (const name of ['destinations', 'sources', 'attractions', 'restaurants', 'accommodations', 'transport', 'costs', 'practicalInfo', 'weatherNotes', 'packingNotes', 'generalNotes', 'intakeDocuments', 'candidates']) {
+        const store = db.createObjectStore(name, { keyPath: 'id' });
+        if (name !== 'destinations') store.createIndex('destinationId', 'destinationId');
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  await new Promise((resolve, reject) => {
+    const tx = v1Db.transaction('destinations', 'readwrite');
+    tx.objectStore('destinations').put({ id: 'existing-dest-1', name: 'Pre-existing Destination', currencies: [] });
+    tx.oncomplete = resolve;
+    tx.onerror = reject;
+  });
+  v1Db.close();
+
+  // Now open with the real application code (getDb -> v2), simulating
+  // the app being reloaded after this update ships. Only the app's
+  // internal connection singleton is reset here — globalThis.indexedDB
+  // must stay the SAME factory instance, or we'd be opening a brand
+  // new, empty database instead of upgrading the one just seeded.
+  __resetDbForTest();
+  const destination = await getDestination('existing-dest-1');
+  assert.ok(destination, 'pre-existing v1 data must survive the v1->v2 upgrade');
+  assert.equal(destination.name, 'Pre-existing Destination');
+
+  // New v2-only functionality (Shopping, exchange rates) must now work
+  // against this upgraded database.
+  const shoppingItem = await createShoppingItem('existing-dest-1', { name: 'Tea' });
+  assert.ok(shoppingItem.id);
+  await setExchangeRate('THB', 'INR', 2.6);
+  assert.equal(await getExchangeRate('THB', 'INR'), 2.6);
 });
 
 console.log(`\n=== ${passed} passed, ${failed} failed ===\n`);

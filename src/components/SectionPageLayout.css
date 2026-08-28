@@ -63,3 +63,23 @@
   padding: var(--space-1) var(--space-2);
 }
 .entry-card__delete:hover { text-decoration: underline; }
+
+.attraction-form__toggle, .checkbox-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  margin-bottom: var(--space-2);
+  cursor: pointer;
+}
+
+.shopping-item-card__actions { display: flex; gap: var(--space-3); margin-top: var(--space-2); }
+.shopping-item-card__shops { margin-top: var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--color-border); display: flex; flex-direction: column; gap: var(--space-2); }
+.shopping-item-card__shop-row { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) 0; }
+
+.currency-page__chips { display: flex; gap: var(--space-2); margin-bottom: var(--space-3); }
+.currency-page__add-form { display: flex; gap: var(--space-2); align-items: flex-start; }
+.currency-page__add-form .field { flex: 1; margin-bottom: 0; }
+.currency-page__rate-row { display: flex; gap: var(--space-2); align-items: center; margin-top: var(--space-2); }
+.currency-page__rate-row .field { flex: 1; margin-bottom: 0; }

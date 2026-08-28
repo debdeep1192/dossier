@@ -5,7 +5,18 @@ const STORE = 'practicalInfo';
 
 export function emptyPracticalInfoEntry() {
   return {
-    topic: '', // free text label, e.g. "Visa", "Connectivity", "Safety"
+    topic: '', // controlled dropdown — see lib/practicalInfoOptions.js
+    // All contact fields are optional structured data for when a topic
+    // genuinely has a specific contact (e.g. Emergency -> a police
+    // station's phone number). Most entries will only ever use
+    // topic + details.
+    name: '',
+    location: '',
+    address: '',
+    phone: '',
+    email: '',
+    website: '',
+    googleMapsUrl: '',
     details: '',
   };
 }

@@ -19,7 +19,13 @@
 // ============================================================
 
 const DB_NAME = 'dossier';
-const DB_VERSION = 1;
+// v1 -> v2: added shoppingItems/shops (Shopping section) and
+// exchangeRates (currency system) object stores. onupgradeneeded's
+// "create if missing" loop below means this is a purely additive
+// upgrade — existing stores and their data are completely untouched;
+// only the new stores get created for anyone opening an existing v1
+// database.
+const DB_VERSION = 2;
 
 // One object store per research section (each a genuinely distinct
 // shape defined in db/stores/*.js — never a shared "item_kind" bucket),
@@ -37,6 +43,9 @@ const STORE_DEFS = [
   { name: 'weatherNotes', keyPath: 'id', indexes: [['destinationId', 'destinationId']] },
   { name: 'packingNotes', keyPath: 'id', indexes: [['destinationId', 'destinationId']] },
   { name: 'generalNotes', keyPath: 'id', indexes: [['destinationId', 'destinationId']] },
+  { name: 'shoppingItems', keyPath: 'id', indexes: [['destinationId', 'destinationId']] },
+  { name: 'shops', keyPath: 'id', indexes: [['destinationId', 'destinationId'], ['shoppingItemId', 'shoppingItemId']] },
+  { name: 'exchangeRates', keyPath: 'id', indexes: [['pair', 'pair']] },
   { name: 'intakeDocuments', keyPath: 'id', indexes: [['destinationId', 'destinationId']] },
   {
     name: 'candidates',
@@ -50,7 +59,7 @@ const STORE_DEFS = [
 // building blocks, not sections themselves).
 export const SECTION_STORES = [
   'attractions', 'restaurants', 'accommodations', 'transport',
-  'costs', 'practicalInfo', 'weatherNotes', 'packingNotes', 'generalNotes',
+  'costs', 'practicalInfo', 'weatherNotes', 'packingNotes', 'generalNotes', 'shoppingItems',
 ];
 
 let dbPromise = null;

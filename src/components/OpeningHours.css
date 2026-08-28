@@ -1,0 +1,11 @@
+.opening-hours { margin-bottom: var(--space-4); }
+.opening-hours__label { display: block; font-size: var(--text-sm); font-weight: 600; color: var(--color-text-primary); margin-bottom: var(--space-2); }
+.opening-hours__group { border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-3); margin-bottom: var(--space-2); }
+.opening-hours__day-picker { display: flex; flex-wrap: wrap; gap: var(--space-1); margin-bottom: var(--space-2); }
+.opening-hours__day-chip { border: 1px solid var(--color-border-strong); background: var(--color-surface); border-radius: var(--radius-full); padding: 2px var(--space-2); font-size: var(--text-xs); font-weight: 600; cursor: pointer; color: var(--color-text-secondary); }
+.opening-hours__day-chip--active { background: var(--color-teal); border-color: var(--color-teal); color: white; }
+.opening-hours__range-row { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-2); }
+.opening-hours__range-row .field { margin-bottom: 0; flex: 1; }
+.opening-hours__remove-range { border: none; background: transparent; color: var(--color-danger); font-size: var(--text-lg); line-height: 1; cursor: pointer; padding: 0 var(--space-1); }
+.opening-hours__add-range, .opening-hours__add-group { display: block; border: 1px dashed var(--color-border-strong); background: transparent; border-radius: var(--radius-md); padding: var(--space-2); font-size: var(--text-xs); font-weight: 600; color: var(--color-teal-dark); cursor: pointer; width: 100%; margin-top: var(--space-1); }
+.opening-hours__remove-group { display: block; border: none; background: transparent; color: var(--color-danger); font-size: var(--text-xs); font-weight: 600; cursor: pointer; margin-top: var(--space-2); }

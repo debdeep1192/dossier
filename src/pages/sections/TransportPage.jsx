@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import { getDestination } from '../../db/stores/destinations';
 import { listTransportEntries, createTransportEntry, updateTransportEntry, deleteTransportEntry, emptyTransportEntry } from '../../db/stores/transport';
+import { getCurrencyOptions, addDestinationCurrency } from '../../db/currency.js';
 import { useCachedQuery, invalidateCachedQuery, invalidateCachedQueryPrefix } from '../../hooks/useCachedQuery';
 import SectionPageLayout from '../../components/SectionPageLayout';
 import Card from '../../components/Card';
@@ -11,6 +12,7 @@ import { Input, TextArea, Select } from '../../components/Field';
 import { PriorityBadge } from '../../components/Badge';
 import { MoneyField, MoneyDisplay } from '../../components/Money';
 import { EmptyState, LoadingState, ErrorState } from '../../components/States';
+import { TRANSPORT_MODES, TRANSPORT_DEFAULT_UNIT_BY_MODE, TRANSPORT_PRICE_UNITS } from '../../lib/priceUnits.js';
 
 export default function TransportPage() {
   const { destinationId } = useParams();
@@ -28,6 +30,12 @@ export default function TransportPage() {
     refresh();
   }
 
+  async function handleAddCurrency(code) {
+    await addDestinationCurrency(destinationId, code);
+    invalidateCachedQuery(`destination:${destinationId}`);
+    refresh();
+  }
+
   async function handleDelete(item) {
     if (!window.confirm(`Delete "${item.from?.label || '?'} → ${item.to?.label || '?'}"?`)) return;
     await deleteTransportEntry(item.id);
@@ -38,6 +46,7 @@ export default function TransportPage() {
   if (loading && !data) return <LoadingState label="Loading transport…" />;
 
   const { destination, items } = data;
+  const currencies = getCurrencyOptions(destination);
 
   return (
     <SectionPageLayout destination={destination} destinationId={destinationId} title="Transport" onAdd={() => setEditing({})}>
@@ -60,13 +69,13 @@ export default function TransportPage() {
       )}
 
       {editing !== null && (
-        <TransportForm destinationId={destinationId} record={editing.id ? editing : null} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); afterMutation(); }} />
+        <TransportForm destinationId={destinationId} record={editing.id ? editing : null} currencies={currencies} onAddCurrency={handleAddCurrency} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); afterMutation(); }} />
       )}
     </SectionPageLayout>
   );
 }
 
-function TransportForm({ destinationId, record, onClose, onSaved }) {
+function TransportForm({ destinationId, record, currencies, onAddCurrency, onClose, onSaved }) {
   const base = record || emptyTransportEntry();
   const [fromLabel, setFromLabel] = useState(base.from?.label || '');
   const [toLabel, setToLabel] = useState(base.to?.label || '');
@@ -78,6 +87,16 @@ function TransportForm({ destinationId, record, onClose, onSaved }) {
   const [priority, setPriority] = useState(base.priority || '');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  function handleModeChange(newMode) {
+    setMode(newMode);
+    // Only auto-set the unit when the price doesn't already have one —
+    // never override something the person already chose or typed.
+    const defaultUnit = TRANSPORT_DEFAULT_UNIT_BY_MODE[newMode];
+    if (defaultUnit && (!price || !price.unit)) {
+      setPrice(prev => ({ amount: prev?.amount ?? '', currency: prev?.currency ?? 'INR', unit: defaultUnit, note: prev?.note ?? '' }));
+    }
+  }
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -108,8 +127,11 @@ function TransportForm({ destinationId, record, onClose, onSaved }) {
           <Input label="From" required value={fromLabel} onChange={e => setFromLabel(e.target.value)} placeholder="e.g. Colombo" />
           <Input label="To" required value={toLabel} onChange={e => setToLabel(e.target.value)} placeholder="e.g. Kandy" />
         </div>
-        <Input label="Mode" value={mode} onChange={e => setMode(e.target.value)} placeholder="e.g. train, bus, tuk-tuk" />
-        <MoneyField value={price} onChange={setPrice} />
+        <Select label="Mode" value={mode} onChange={e => handleModeChange(e.target.value)}>
+          <option value="">Choose a mode…</option>
+          {TRANSPORT_MODES.map(m => <option key={m} value={m}>{m}</option>)}
+        </Select>
+        <MoneyField value={price} onChange={setPrice} currencies={currencies} defaultCurrency="INR" unitOptions={TRANSPORT_PRICE_UNITS} defaultUnit={TRANSPORT_DEFAULT_UNIT_BY_MODE[mode] || 'Per person'} onAddCurrency={onAddCurrency} />
         <Input label="Duration" value={duration} onChange={e => setDuration(e.target.value)} placeholder="e.g. 3 hours" />
         <Input label="Schedule / frequency" value={schedule} onChange={e => setSchedule(e.target.value)} />
         <TextArea label="Booking notes" value={bookingNotes} onChange={e => setBookingNotes(e.target.value)} rows={2} />

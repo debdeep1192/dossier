@@ -10,6 +10,7 @@ import Modal from '../../components/Modal';
 import { Input, TextArea } from '../../components/Field';
 import { MoneyField, MoneyDisplay } from '../../components/Money';
 import { EmptyState, LoadingState, ErrorState } from '../../components/States';
+import { getCurrencyOptions, addDestinationCurrency } from '../../db/currency.js';
 
 export default function CostsPage() {
   const { destinationId } = useParams();
@@ -27,6 +28,12 @@ export default function CostsPage() {
     refresh();
   }
 
+  async function handleAddCurrency(code) {
+    await addDestinationCurrency(destinationId, code);
+    invalidateCachedQuery(`destination:${destinationId}`);
+    refresh();
+  }
+
   async function handleDelete(item) {
     if (!window.confirm(`Delete "${item.item}"?`)) return;
     await deleteCostEntry(item.id);
@@ -37,6 +44,7 @@ export default function CostsPage() {
   if (loading && !data) return <LoadingState label="Loading costs…" />;
 
   const { destination, items } = data;
+  const currencies = getCurrencyOptions(destination);
 
   return (
     <SectionPageLayout destination={destination} destinationId={destinationId} title="Costs & Money" onAdd={() => setEditing({})}>
@@ -56,13 +64,13 @@ export default function CostsPage() {
       )}
 
       {editing !== null && (
-        <CostForm destinationId={destinationId} record={editing.id ? editing : null} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); afterMutation(); }} />
+        <CostForm destinationId={destinationId} record={editing.id ? editing : null} currencies={currencies} onAddCurrency={handleAddCurrency} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); afterMutation(); }} />
       )}
     </SectionPageLayout>
   );
 }
 
-function CostForm({ destinationId, record, onClose, onSaved }) {
+function CostForm({ destinationId, record, currencies, onAddCurrency, onClose, onSaved }) {
   const base = record || emptyCostEntry();
   const [item, setItem] = useState(base.item || '');
   const [price, setPrice] = useState(base.price || null);
@@ -91,7 +99,7 @@ function CostForm({ destinationId, record, onClose, onSaved }) {
     <Modal open onClose={onClose} title={record ? 'Edit Cost' : 'New Cost'}>
       <form onSubmit={handleSubmit}>
         <Input label="Item" required autoFocus value={item} onChange={e => setItem(e.target.value)} placeholder="e.g. Local SIM card" />
-        <MoneyField value={price} onChange={setPrice} />
+        <MoneyField value={price} onChange={setPrice} currencies={currencies} defaultCurrency="INR" onAddCurrency={onAddCurrency} />
         <TextArea label="Context" value={context} onChange={e => setContext(e.target.value)} rows={2} />
         {error && <p className="form-error" role="alert">{error}</p>}
         <Button type="submit" fullWidth disabled={submitting}>{submitting ? 'Saving…' : 'Save'}</Button>

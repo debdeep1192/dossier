@@ -27,3 +27,9 @@
   background: var(--color-sage);
   color: var(--color-teal-dark);
 }
+
+.weather-recommendation--excellent { background: #E4F2EF; color: var(--color-teal-dark); }
+.weather-recommendation--very_good { background: #E4F2EF; color: var(--color-teal-dark); }
+.weather-recommendation--good { background: var(--color-neutral-200); color: var(--color-text-secondary); }
+.weather-recommendation--bad { background: #FBF3DE; color: var(--color-saffron-dark); }
+.weather-recommendation--must_avoid { background: #FBEBE6; color: var(--color-coral-dark); }

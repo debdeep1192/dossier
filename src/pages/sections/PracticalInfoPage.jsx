@@ -7,8 +7,9 @@ import SectionPageLayout from '../../components/SectionPageLayout';
 import Card from '../../components/Card';
 import Button from '../../components/Button';
 import Modal from '../../components/Modal';
-import { Input, TextArea } from '../../components/Field';
+import { Input, TextArea, Select } from '../../components/Field';
 import { EmptyState, LoadingState, ErrorState } from '../../components/States';
+import { PRACTICAL_INFO_TOPICS } from '../../lib/practicalInfoOptions.js';
 
 export default function PracticalInfoPage() {
   const { destinationId } = useParams();
@@ -27,7 +28,7 @@ export default function PracticalInfoPage() {
   }
 
   async function handleDelete(item) {
-    if (!window.confirm(`Delete "${item.topic}"?`)) return;
+    if (!window.confirm(`Delete "${item.topic}${item.name ? ` — ${item.name}` : ''}"?`)) return;
     await deletePracticalInfoEntry(item.id);
     afterMutation();
   }
@@ -45,7 +46,9 @@ export default function PracticalInfoPage() {
         items.map(item => (
           <Card key={item.id} interactive padding="sm" accentColor="var(--color-teal-dark)" className="entry-card" onClick={() => setEditing(item)}>
             <div className="entry-card__main">
-              <span className="entry-card__title">{item.topic}</span>
+              <span className="entry-card__title">{item.topic}{item.name ? ` — ${item.name}` : ''}</span>
+              {item.phone && <p className="entry-card__meta">📞 {item.phone}</p>}
+              {item.location && <p className="entry-card__meta">{item.location}</p>}
               {item.details && <p className="entry-card__meta">{item.details}</p>}
             </div>
             <button type="button" className="entry-card__delete" onClick={(e) => { e.stopPropagation(); handleDelete(item); }}>Delete</button>
@@ -63,17 +66,25 @@ export default function PracticalInfoPage() {
 function PracticalInfoForm({ destinationId, record, onClose, onSaved }) {
   const base = record || emptyPracticalInfoEntry();
   const [topic, setTopic] = useState(base.topic || '');
+  const [showContactFields, setShowContactFields] = useState(Boolean(base.name || base.phone || base.email || base.website || base.address || base.googleMapsUrl));
+  const [name, setName] = useState(base.name || '');
+  const [location, setLocation] = useState(base.location || '');
+  const [address, setAddress] = useState(base.address || '');
+  const [phone, setPhone] = useState(base.phone || '');
+  const [email, setEmail] = useState(base.email || '');
+  const [website, setWebsite] = useState(base.website || '');
+  const [googleMapsUrl, setGoogleMapsUrl] = useState(base.googleMapsUrl || '');
   const [details, setDetails] = useState(base.details || '');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   async function handleSubmit(e) {
     e.preventDefault();
-    if (!topic.trim()) { setError('Give this a topic name.'); return; }
+    if (!topic) { setError('Choose a topic.'); return; }
     setError('');
     setSubmitting(true);
     try {
-      const fields = { topic: topic.trim(), details };
+      const fields = { topic, name, location, address, phone, email, website, googleMapsUrl, details };
       if (record) await updatePracticalInfoEntry(record.id, fields);
       else await createPracticalInfoEntry(destinationId, fields);
       onSaved();
@@ -87,8 +98,29 @@ function PracticalInfoForm({ destinationId, record, onClose, onSaved }) {
   return (
     <Modal open onClose={onClose} title={record ? 'Edit Practical Info' : 'New Practical Info'}>
       <form onSubmit={handleSubmit}>
-        <Input label="Topic" required autoFocus value={topic} onChange={e => setTopic(e.target.value)} placeholder="e.g. Visa, Connectivity, Safety" />
-        <TextArea label="Details" value={details} onChange={e => setDetails(e.target.value)} rows={5} />
+        <Select label="Topic" value={topic} onChange={e => setTopic(e.target.value)}>
+          <option value="">Choose a topic…</option>
+          {PRACTICAL_INFO_TOPICS.map(t => <option key={t} value={t}>{t}</option>)}
+        </Select>
+
+        <TextArea label="Details / Notes" value={details} onChange={e => setDetails(e.target.value)} rows={4} placeholder="e.g. Airtel works reasonably well in central Darjeeling…" />
+
+        {!showContactFields ? (
+          <button type="button" className="checkbox-toggle" onClick={() => setShowContactFields(true)}>+ Add a specific contact (name, phone, address…)</button>
+        ) : (
+          <>
+            <Input label="Name" value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Darjeeling Police" />
+            <Input label="Location" value={location} onChange={e => setLocation(e.target.value)} />
+            <Input label="Address" value={address} onChange={e => setAddress(e.target.value)} />
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-2)' }}>
+              <Input label="Phone" value={phone} onChange={e => setPhone(e.target.value)} />
+              <Input label="Email" value={email} onChange={e => setEmail(e.target.value)} />
+            </div>
+            <Input label="Website" value={website} onChange={e => setWebsite(e.target.value)} placeholder="https://…" />
+            <Input label="Google Maps link" value={googleMapsUrl} onChange={e => setGoogleMapsUrl(e.target.value)} placeholder="https://…" />
+          </>
+        )}
+
         {error && <p className="form-error" role="alert">{error}</p>}
         <Button type="submit" fullWidth disabled={submitting}>{submitting ? 'Saving…' : 'Save'}</Button>
       </form>

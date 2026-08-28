@@ -8,6 +8,12 @@ import Card from '../components/Card';
 import Button from '../components/Button';
 import { Input, TextArea, Select } from '../components/Field';
 import { MoneyField } from '../components/Money';
+import { FeeBandsField } from '../components/FeeBands';
+import { getCurrencyOptions, addDestinationCurrency } from '../db/currency.js';
+import { ATTRACTION_CATEGORIES } from '../lib/attractionOptions.js';
+import { PRACTICAL_INFO_TOPICS } from '../lib/practicalInfoOptions.js';
+import { emptyFeeBand } from '../lib/feeBands.js';
+import { emptyOpeningHours } from '../lib/openingHours.js';
 import { LoadingState, ErrorState } from '../components/States';
 import '../components/SectionPageLayout.css';
 import './ReviewPage.css';
@@ -39,8 +45,15 @@ export default function ReviewPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  async function handleAddCurrency(code) {
+    await addDestinationCurrency(destinationId, code);
+    load();
+  }
+
   if (error) return <ErrorState description={error} onRetry={load} />;
   if (!intake) return <LoadingState label="Loading candidates…" />;
+
+  const currencies = getCurrencyOptions(destination);
 
   const pending = candidates.filter(c => c.status === 'pending_review');
   const decided = candidates.filter(c => c.status !== 'pending_review');
@@ -102,7 +115,7 @@ export default function ReviewPage() {
         <section key={section.key} className="review-page__group">
           <h2>{section.icon} {section.label} <span className="review-page__group-count">({items.length})</span></h2>
           {items.map(candidate => (
-            <CandidateCard key={candidate.id} candidate={candidate} defaultSection={section.key} onAccept={handleAccept} onReject={handleReject} />
+            <CandidateCard key={candidate.id} candidate={candidate} defaultSection={section.key} currencies={currencies} onAddCurrency={handleAddCurrency} onAccept={handleAccept} onReject={handleReject} />
           ))}
         </section>
       ))}
@@ -111,7 +124,7 @@ export default function ReviewPage() {
         <section className="review-page__group">
           <h2>Unclassified <span className="review-page__group-count">({unclassified.length})</span></h2>
           {unclassified.map(candidate => (
-            <CandidateCard key={candidate.id} candidate={candidate} defaultSection="" onAccept={handleAccept} onReject={handleReject} />
+            <CandidateCard key={candidate.id} candidate={candidate} defaultSection="" currencies={currencies} onAddCurrency={handleAddCurrency} onAccept={handleAccept} onReject={handleReject} />
           ))}
         </section>
       )}
@@ -139,7 +152,7 @@ export default function ReviewPage() {
   );
 }
 
-function CandidateCard({ candidate, defaultSection, onAccept, onReject }) {
+function CandidateCard({ candidate, defaultSection, currencies, onAddCurrency, onAccept, onReject }) {
   const [section, setSection] = useState(candidate.proposedSection || defaultSection || '');
   const [fields, setFields] = useState(() => normalizeFields(section, candidate.proposedFields));
   const [busy, setBusy] = useState(false);
@@ -185,7 +198,7 @@ function CandidateCard({ candidate, defaultSection, onAccept, onReject }) {
         {SECTION_OPTIONS.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
       </Select>
 
-      {section && <CandidateFields section={section} fields={fields} onChange={setFields} />}
+      {section && <CandidateFields section={section} fields={fields} onChange={setFields} currencies={currencies} onAddCurrency={onAddCurrency} />}
 
       {localError && <p className="form-error" role="alert">{localError}</p>}
 
@@ -205,7 +218,13 @@ function normalizeFields(section, proposed) {
   const p = proposed || {};
   switch (section) {
     case 'attractions':
-      return { place: { name: p.placeName || '', locality: '', city: '', country: '', googleMapsUrl: '' }, category: '', description: p.description || '', price: p.price || null, openingHours: '', typicalDurationMinutes: '', bestTimeOfDay: '' };
+      return {
+        place: { name: p.placeName || '', locality: '', city: '', country: '', googleMapsUrl: '' },
+        category: '', description: p.description || '',
+        feeBands: p.price ? [{ ...emptyFeeBand(), status: 'paid', amount: p.price.amount, currency: p.price.currency }] : [emptyFeeBand()],
+        cameraCharge: null, videographyCharge: null,
+        openingHours: emptyOpeningHours(), typicallySpent: '', bestTimeOfDay: { option: '', note: '' },
+      };
     case 'restaurants':
       return { hasPlace: Boolean(p.placeName), place: { name: p.placeName || '', locality: '', city: '', country: '', googleMapsUrl: '' }, dishName: p.placeName || '', cuisine: '', price: p.price || null, dietaryNotes: p.dietaryNotes || '' };
     case 'accommodations':
@@ -215,18 +234,19 @@ function normalizeFields(section, proposed) {
     case 'costs':
       return { item: p.item || '', price: p.price || null, context: p.context || '' };
     case 'practicalInfo':
-      return { topic: p.topic || '', details: p.details || '' };
+      return { topic: PRACTICAL_INFO_TOPICS.includes(p.topic) ? p.topic : '', details: p.details || '' };
     case 'weatherNotes':
-      return { period: p.period || '', description: p.description || '', recommendation: '' };
+      return { period: p.period || '', description: p.description || '', temperatureMin: '', temperatureMax: '', temperatureUnit: 'C', rain: 'Rare', snow: 'Rare', recommendation: '', recommendationNotes: '' };
     case 'packingNotes':
-      return { item: p.item || '', notes: p.notes || '', essential: false };
+      return { item: p.item || '', remarks: p.remarks || '', essential: false, category: 'Other' };
+    case 'shoppingItems':
+      return { name: p.name || '', notes: p.notes || '' };
     case 'generalNotes':
-      return { title: p.title || candidate_title_fallback(p), content: p.content || '' };
+      return { title: p.title || '', content: p.content || '' };
     default:
       return {};
   }
 }
-function candidate_title_fallback(p) { return p.title || ''; }
 
 // Converts the review UI's working field state (which uses UI-only
 // helpers like `hasPlace`, `fromLabel`/`toLabel`) into the exact shape
@@ -263,11 +283,13 @@ function validateRequired(section, fields) {
     case 'costs':
       return fields.item?.trim() ? null : 'Give this a name.';
     case 'practicalInfo':
-      return fields.topic?.trim() ? null : 'Give this a topic.';
+      return fields.topic ? null : 'Choose a topic.';
     case 'weatherNotes':
       return fields.period?.trim() ? null : 'Give this a period.';
     case 'packingNotes':
       return fields.item?.trim() ? null : 'Give this an item name.';
+    case 'shoppingItems':
+      return fields.name?.trim() ? null : 'Give this a name.';
     case 'generalNotes':
       return fields.title?.trim() ? null : 'Give this a title.';
     default:
@@ -275,7 +297,7 @@ function validateRequired(section, fields) {
   }
 }
 
-function CandidateFields({ section, fields, onChange }) {
+function CandidateFields({ section, fields, onChange, currencies, onAddCurrency }) {
   function set(patch) { onChange({ ...fields, ...patch }); }
 
   switch (section) {
@@ -283,9 +305,12 @@ function CandidateFields({ section, fields, onChange }) {
       return (
         <>
           <Input label="Place name" required value={fields.place?.name || ''} onChange={e => set({ place: { ...fields.place, name: e.target.value } })} />
-          <Input label="Category" value={fields.category || ''} onChange={e => set({ category: e.target.value })} />
-          <TextArea label="Description" value={fields.description || ''} onChange={e => set({ description: e.target.value })} rows={2} />
-          <MoneyField label="Entry fee" value={fields.price} onChange={price => set({ price })} />
+          <Select label="Category" value={fields.category || ''} onChange={e => set({ category: e.target.value })}>
+            <option value="">Choose a category…</option>
+            {ATTRACTION_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+          </Select>
+          <TextArea label="Notes" value={fields.description || ''} onChange={e => set({ description: e.target.value })} rows={2} />
+          <FeeBandsField label="Entry fee" bands={fields.feeBands} onChange={feeBands => set({ feeBands })} currencies={currencies} onAddCurrency={onAddCurrency} />
         </>
       );
     case 'restaurants':
@@ -301,7 +326,7 @@ function CandidateFields({ section, fields, onChange }) {
             <Input label="Dish / food note name" required value={fields.dishName || ''} onChange={e => set({ dishName: e.target.value })} />
           )}
           <Input label="Cuisine" value={fields.cuisine || ''} onChange={e => set({ cuisine: e.target.value })} />
-          <MoneyField value={fields.price} onChange={price => set({ price })} />
+          <MoneyField value={fields.price} onChange={price => set({ price })} currencies={currencies} defaultCurrency="INR" onAddCurrency={onAddCurrency} />
         </>
       );
     case 'accommodations':
@@ -309,7 +334,7 @@ function CandidateFields({ section, fields, onChange }) {
         <>
           <Input label="Place name" required value={fields.place?.name || ''} onChange={e => set({ place: { ...fields.place, name: e.target.value } })} />
           <Input label="Type" value={fields.accommodationType || ''} onChange={e => set({ accommodationType: e.target.value })} />
-          <MoneyField label="Price per night" value={fields.price} onChange={price => set({ price })} />
+          <MoneyField label="Price" value={fields.price} onChange={price => set({ price })} currencies={currencies} defaultCurrency="INR" onAddCurrency={onAddCurrency} />
         </>
       );
     case 'transport':
@@ -318,21 +343,24 @@ function CandidateFields({ section, fields, onChange }) {
           <Input label="From" required value={fields.fromLabel || ''} onChange={e => set({ fromLabel: e.target.value })} />
           <Input label="To" required value={fields.toLabel || ''} onChange={e => set({ toLabel: e.target.value })} />
           <Input label="Mode" value={fields.mode || ''} onChange={e => set({ mode: e.target.value })} />
-          <MoneyField value={fields.price} onChange={price => set({ price })} />
+          <MoneyField value={fields.price} onChange={price => set({ price })} currencies={currencies} defaultCurrency="INR" onAddCurrency={onAddCurrency} />
         </>
       );
     case 'costs':
       return (
         <>
           <Input label="Item" required value={fields.item || ''} onChange={e => set({ item: e.target.value })} />
-          <MoneyField value={fields.price} onChange={price => set({ price })} />
+          <MoneyField value={fields.price} onChange={price => set({ price })} currencies={currencies} defaultCurrency="INR" onAddCurrency={onAddCurrency} />
           <TextArea label="Context" value={fields.context || ''} onChange={e => set({ context: e.target.value })} rows={2} />
         </>
       );
     case 'practicalInfo':
       return (
         <>
-          <Input label="Topic" required value={fields.topic || ''} onChange={e => set({ topic: e.target.value })} />
+          <Select label="Topic" required value={fields.topic || ''} onChange={e => set({ topic: e.target.value })}>
+            <option value="">Choose a topic…</option>
+            {PRACTICAL_INFO_TOPICS.map(t => <option key={t} value={t}>{t}</option>)}
+          </Select>
           <TextArea label="Details" value={fields.details || ''} onChange={e => set({ details: e.target.value })} rows={3} />
         </>
       );
@@ -345,6 +373,13 @@ function CandidateFields({ section, fields, onChange }) {
       );
     case 'packingNotes':
       return <Input label="Item" required value={fields.item || ''} onChange={e => set({ item: e.target.value })} />;
+    case 'shoppingItems':
+      return (
+        <>
+          <Input label="What to buy" required value={fields.name || ''} onChange={e => set({ name: e.target.value })} />
+          <TextArea label="Notes" value={fields.notes || ''} onChange={e => set({ notes: e.target.value })} rows={2} />
+        </>
+      );
     case 'generalNotes':
       return (
         <>
