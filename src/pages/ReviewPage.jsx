@@ -219,16 +219,15 @@ function normalizeFields(section, proposed) {
   switch (section) {
     case 'attractions':
       return {
-        place: { name: p.placeName || '', locality: '', city: '', country: '', googleMapsUrl: '' },
+        place: { name: p.placeName || '', locality: p.placeArea || '', city: '', country: '', googleMapsUrl: '' },
         category: '', description: p.description || '',
         feeBands: p.price ? [{ ...emptyFeeBand(), status: 'paid', amount: p.price.amount, currency: p.price.currency }] : [emptyFeeBand()],
         cameraCharge: null, videographyCharge: null,
         openingHours: emptyOpeningHours(), typicallySpent: '', bestTimeOfDay: { option: '', note: '' },
       };
     case 'restaurants':
-      return { hasPlace: Boolean(p.placeName), place: { name: p.placeName || '', locality: '', city: '', country: '', googleMapsUrl: '' }, dishName: p.placeName || '', cuisine: '', price: p.price || null, dietaryNotes: p.dietaryNotes || '' };
-    case 'accommodations':
-      return { place: { name: p.placeName || '', locality: '', city: '', country: '', googleMapsUrl: '' }, accommodationType: '', price: p.price || null, roomType: '', amenityNotes: p.amenityNotes || '' };
+      return { hasPlace: Boolean(p.placeName), place: { name: p.placeName || '', locality: p.placeArea || '', city: '', country: '', googleMapsUrl: '' }, dishName: p.placeName || '', cuisine: '', price: p.price || null, dietaryNotes: p.dietaryNotes || '' };    case 'accommodations':
+      return { place: { name: p.placeName || '', locality: p.placeArea || '', city: '', country: '', googleMapsUrl: '' }, accommodationType: '', price: p.price || null, roomType: '', amenityNotes: p.amenityNotes || '' };
     case 'transport':
       return { fromLabel: '', toLabel: '', mode: '', price: p.price || null, duration: '', bookingNotes: p.bookingNotes || '' };
     case 'costs':

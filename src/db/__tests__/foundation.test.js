@@ -16,6 +16,7 @@ import { createCostEntry, getCostEntry } from '../stores/costs.js';
 import { createIntake, getIntake, updateCandidate, acceptCandidate, rejectCandidate, resetCandidateToPending } from '../stores/intake.js';
 import { extractCandidates, extractPriceFromText } from '../extraction.js';
 import { buildGoogleMapsUrl } from '../../lib/googleMaps.js';
+import { reconstructLines, stripRepeatedPageBoilerplate } from '../../lib/pdfText.js';
 import { createAccommodation } from '../stores/accommodations.js';
 import { createWeatherNote, normalizeWeatherNote } from '../stores/weatherNotes.js';
 import { emptyFeeBand, formatFeeBands } from '../../lib/feeBands.js';
@@ -192,6 +193,259 @@ await test('extractPriceFromText recognizes free and currency+amount, ignores pl
   assert.equal(extractPriceFromText('Costs LKR 1,500 per person').amount, 1500);
   assert.equal(extractPriceFromText('Costs LKR 1,500 per person').currency, 'LKR');
   assert.equal(extractPriceFromText('Room 204, second floor'), null, 'a bare number should not be misread as a price');
+});
+
+console.log('\n5b. Extraction regression suite (real Darjeeling-parser failure)');
+
+// Scenario 1: normal bullet attraction list -> individual candidates.
+await test('scenario 1: a normal bullet attraction list produces one candidate per attraction', () => {
+  const doc = ['Attractions & Activities', '- Tiger Hill', '- Batasia Loop', '- Ghum Monastery'].join('\n');
+  const candidates = extractCandidates(doc);
+  assert.equal(candidates.length, 3);
+  assert.ok(candidates.every(c => c.proposedSection === 'attractions'));
+  assert.deepEqual(candidates.map(c => c.sourceExcerpt), ['Tiger Hill', 'Batasia Loop', 'Ghum Monastery']);
+});
+
+// Scenario 2: narrative paragraph under an Attractions heading -> zero attraction candidates.
+await test('scenario 2: narrative prose under an Attractions heading produces zero candidates', () => {
+  const doc = [
+    'Attractions & Activities',
+    'Darjeeling offers a remarkable range of viewpoints and colonial-era landmarks, each shaped by the town\'s unique history as a hill station retreat and its enduring relationship with the surrounding tea gardens and mountain vistas.',
+  ].join('\n');
+  const candidates = extractCandidates(doc);
+  assert.equal(candidates.length, 0, 'a narrative paragraph must never become a candidate merely for sitting under a matching heading');
+});
+
+// Scenario 3: large narrative Food & Restaurants section -> zero restaurant candidates from the history/background prose specifically.
+await test('scenario 3: historical/background prose in a Food & Restaurants section produces no candidates from that prose', () => {
+  const doc = [
+    'Food & Restaurants',
+    'HISTORY, MUST-TRY DISHES, AND WHERE TO EAT THEM',
+    'History & Evolution of Darjeeling\'s Food',
+    'The culinary identity of Darjeeling reflects its Nepali, Tibetan, and Bengali influences, shaped over more than a century by migration and trade along the old Himalayan routes connecting Sikkim, Nepal, and Tibet to the plains of Bengal.',
+  ].join('\n');
+  const candidates = extractCandidates(doc);
+  assert.equal(candidates.length, 0, 'historical/background narrative must produce zero candidates, even under a restaurants heading');
+});
+
+// Scenario 4 & Tables: hotel table with multiple rows -> separate accommodation candidates, name/area/rating/price mapped, not one giant candidate.
+await test('scenario 4: a hotel table with a header row produces one distinct accommodation candidate per row', () => {
+  const doc = [
+    'Hotels',
+    'Hotel | Area | Rating | Price/Night | Why Consider It',
+    'Dekeling Hotel | Near Chowrasta | 9.2/10 | ₹2,800–3,400 | Heritage-style rooms with excellent service and mountain views',
+    'Muscatel Stardust | CR Das Road, Chowrasta | 8.9/10 | ₹3,500 | Deluxe rooms with modern amenities',
+    'Villa Everest | Close to Chowrasta | 9.0/10 | ₹2,800–3,300 | Quiet property with good breakfast',
+    'Hotel Seven Seventeen | Near Chowrasta | 8.5/10 | ₹2,600 | Budget-friendly with basic amenities',
+    'Windamere Hotel | Observatory Hill | 9.5/10 | ₹8,500 | Historic colonial-era hotel with old-world charm',
+  ].join('\n');
+  const candidates = extractCandidates(doc);
+  assert.equal(candidates.length, 5, 'the table must produce exactly one candidate per data row, not one giant candidate for the whole table');
+  assert.ok(candidates.every(c => c.proposedSection === 'accommodations'));
+  const names = candidates.map(c => c.proposedFields.placeName);
+  assert.deepEqual(names, ['Dekeling Hotel', 'Muscatel Stardust', 'Villa Everest', 'Hotel Seven Seventeen', 'Windamere Hotel']);
+  // A row whose own name happens to contain a column keyword ("Hotel
+  // Seven Seventeen" contains "Hotel") must still be extracted as its
+  // own row, not misdetected as a second header row and swallowed.
+  const sevenSeventeen = candidates.find(c => c.proposedFields.placeName === 'Hotel Seven Seventeen');
+  assert.ok(sevenSeventeen, 'a hotel whose name contains a column keyword must not be lost');
+  assert.equal(sevenSeventeen.proposedFields.placeArea, 'Near Chowrasta');
+  assert.ok(sevenSeventeen.proposedFields.price, 'price should be extracted from the row');
+  assert.equal(sevenSeventeen.proposedFields.price.amount, 2600);
+  // Rating and the "why consider it" text must be preserved, not
+  // discarded, even though there's no dedicated schema field for a
+  // star rating — see "do not lose information."
+  assert.ok(sevenSeventeen.proposedFields.amenityNotes.includes('8.5/10'));
+  assert.ok(sevenSeventeen.proposedFields.amenityNotes.includes('Budget-friendly'));
+});
+
+// Scenario 5: restaurant table/list -> separate restaurant candidates.
+await test('scenario 5: a restaurant list produces separate restaurant candidates', () => {
+  const doc = ['Where to Eat', "- Glenary's", "- Keventer's", '- Kunga Restaurant'].join('\n');
+  const candidates = extractCandidates(doc);
+  assert.equal(candidates.length, 3);
+  assert.ok(candidates.every(c => c.proposedSection === 'restaurants'));
+});
+
+// Scenario 6: PDF-style line wrapping does not accidentally merge unrelated records.
+await test('scenario 6: reconstructed PDF lines keep each record on its own candidate, not merged', () => {
+  // Simulates what lib/pdfText.js now hands to the extractor after
+  // reconstructing real lines from pdfjs's hasEOL-delimited text items
+  // — one attraction name per line, exactly as a real toy-train/hill
+  // guide's list would appear once bullets are lost in extraction.
+  const doc = ['Attractions & Activities', 'Tiger Hill', 'Batasia Loop', 'Ghum Monastery'].join('\n');
+  const candidates = extractCandidates(doc);
+  assert.equal(candidates.length, 3, 'each reconstructed line should remain its own candidate, not merge into a giant blob');
+  assert.deepEqual(candidates.map(c => c.sourceExcerpt), ['Tiger Hill', 'Batasia Loop', 'Ghum Monastery']);
+});
+
+// Scenario 7: repeated PDF page footer removed/ignored.
+await test('scenario 7: a repeated page-footer-style line is ignored, not surfaced as a candidate', () => {
+  const doc = [
+    'Attractions & Activities',
+    '- Tiger Hill',
+    'Darjeeling - The Complete Guide | 17/33',
+    '- Batasia Loop',
+    'Page 18 of 33',
+    '- Ghum Monastery',
+  ].join('\n');
+  const candidates = extractCandidates(doc);
+  assert.equal(candidates.length, 3, 'page-footer/page-number lines must never become candidates');
+  assert.ok(!candidates.some(c => c.sourceExcerpt.includes('Complete Guide')));
+  assert.ok(!candidates.some(c => c.sourceExcerpt.includes('Page 18')));
+});
+
+// Scenario 8: itinerary schedule is not converted into attraction candidates.
+await test('scenario 8: itinerary/schedule entries never become candidates, even when they name a real place', () => {
+  const doc = [
+    'Day 1',
+    '08:00–09:30 Breakfast at the hotel',
+    '10:00 Depart for Tiger Hill',
+    'Morning: sunrise viewing',
+    'Lunch: at a local restaurant',
+  ].join('\n');
+  const candidates = extractCandidates(doc);
+  assert.equal(candidates.length, 0, 'a schedule entry must not become an Attraction simply because it names a place');
+});
+
+// Scenario 9: document-level closing notes are not candidates.
+await test('scenario 9: document-level closing/meta notes never become candidates', () => {
+  const doc = [
+    'Closing note from the original document: this itinerary was compiled from multiple sources and may need verification before travel.',
+    'Original caveat: prices are indicative and may change seasonally.',
+    'Scheduling note: times assume good weather.',
+  ].join('\n');
+  const candidates = extractCandidates(doc);
+  assert.equal(candidates.length, 0);
+});
+
+// Scenario 10 + regression case: the actual realistic Darjeeling
+// document structure that caused the original failure — narrative,
+// headings, a hotel table, bulleted lists, itinerary, page
+// footer, and closing meta-text all in one document. Only genuine
+// research records should survive.
+await test('scenario 10 (regression): a realistic mixed Darjeeling-style document extracts only real records', () => {
+  const doc = [
+    'About Darjeeling',
+    'HISTORY, GEOGRAPHY, CLIMATE, AND THE PRACTICAL ESSENTIALS',
+    'History & Geography',
+    'Darjeeling was developed by the British in the mid-19th century as a hill station and sanatorium, chosen for its cool climate and dramatic views of the Kangchenjunga range. The town grew rapidly around its tea gardens, and by the early twentieth century had become one of the most celebrated hill retreats in colonial India, known for its distinctive architecture and toy train.',
+    '',
+    'Food & Restaurants',
+    'HISTORY, MUST-TRY DISHES, AND WHERE TO EAT THEM',
+    'History & Evolution of Darjeeling\'s Food',
+    'The culinary identity of Darjeeling reflects its Nepali, Tibetan, and Bengali influences, shaped over more than a century by migration and trade along the old Himalayan routes connecting Sikkim, Nepal, and Tibet to the plains of Bengal.',
+    'Must-Try Dishes',
+    '- Momo',
+    '- Thukpa',
+    '- Thenthuk',
+    '- Gundruk & Sinki',
+    '- Tingmo',
+    'Where to Eat',
+    "- Glenary's",
+    "- Keventer's",
+    '- Kunga Restaurant',
+    '',
+    'Hotels',
+    'NEAR MALL ROAD/CHOWRASTA UNDER 3,500/NIGHT FOR TWO ADULTS, CHILD STAYS FREE',
+    'Hotel | Area | Rating | Price/Night | Why Consider It',
+    'Dekeling Hotel | Near Chowrasta | 9.2/10 | ₹2,800–3,400 | Heritage-style rooms with excellent service and mountain views',
+    'Muscatel Stardust | CR Das Road, Chowrasta | 8.9/10 | ₹3,500 | Deluxe rooms with modern amenities',
+    'Villa Everest | Close to Chowrasta | 9.0/10 | ₹2,800–3,300 | Quiet property with good breakfast',
+    'Sumitel Darjeeling | Mall Road | 8.7/10 | ₹4,200 | Central location, good for families',
+    'Hotel Seven Seventeen | Near Chowrasta | 8.5/10 | ₹2,600 | Budget-friendly with basic amenities',
+    'Windamere Hotel | Observatory Hill | 9.5/10 | ₹8,500 | Historic colonial-era hotel with old-world charm',
+    '',
+    'Attractions & Activities',
+    '- Tiger Hill',
+    '- Batasia Loop',
+    '- Ghum Monastery',
+    '- Japanese Peace Pagoda',
+    '- Happy Valley Tea Estate',
+    '- Himalayan Mountaineering Institute',
+    '',
+    'Shopping',
+    '- Tibetan Refugee Self Help Centre',
+    '- Habeeb Mullick',
+    '',
+    'Practical Information',
+    'Emergency: Darjeeling Police, phone 0354-2254422',
+    'Connectivity: Airtel and Jio both work reasonably well in central Darjeeling, though signal can be patchy in outlying areas.',
+    '',
+    'Day 1',
+    '08:00–09:30 Breakfast at the hotel',
+    '10:00 Depart for Tiger Hill',
+    'Morning: sunrise viewing',
+    'Lunch: at a local restaurant',
+    '',
+    'Darjeeling - The Complete Guide | 17/33',
+    '',
+    'Closing note from the original document: this itinerary was compiled from multiple sources and may need verification before travel.',
+  ].join('\n');
+
+  const candidates = extractCandidates(doc);
+  const bySection = (section) => candidates.filter(c => c.proposedSection === section);
+
+  assert.equal(bySection('accommodations').length, 6, 'all 6 hotel table rows should each be their own candidate');
+  assert.equal(bySection('attractions').length, 6, 'all 6 bulleted attractions should be extracted');
+  assert.equal(bySection('restaurants').length, 8, '5 must-try dishes + 3 named restaurants');
+  assert.equal(bySection('shoppingItems').length, 2);
+  assert.equal(bySection('practicalInfo').length, 2, 'both practical-info facts should be extracted, not just recognized as a heading');
+
+  const excerpts = candidates.map(c => c.sourceExcerpt);
+  assert.ok(!excerpts.some(t => t.includes('mid-19th century')), 'the About Darjeeling history paragraph must not appear');
+  assert.ok(!excerpts.some(t => t.includes('culinary identity')), 'the food history paragraph must not appear');
+  assert.ok(!excerpts.some(t => t.includes('Breakfast at the hotel')), 'itinerary lines must not appear');
+  assert.ok(!excerpts.some(t => t.includes('Complete Guide')), 'the page footer must not appear');
+  assert.ok(!excerpts.some(t => t.includes('Closing note')), 'the closing meta-note must not appear');
+
+  // No giant candidate: nothing should be anywhere close to a whole
+  // paragraph/page in length — this is the direct regression check for
+  // the original bug (a whole page becoming one candidate).
+  const longest = Math.max(...candidates.map(c => c.sourceExcerpt.length));
+  assert.ok(longest < 200, `no single candidate should be page-length; longest was ${longest} chars`);
+
+  assert.equal(candidates.length, 24, 'total candidate count for this document should be exactly the real records, no more, no less');
+});
+
+// Scenario 11: an unclear record is surfaced as Unclassified rather than guessed into the wrong section.
+await test('scenario 11: a discrete-looking record with no heading match is Unclassified, not guessed', () => {
+  const candidates = extractCandidates('Random Notable Place');
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].proposedSection, null);
+  assert.ok(candidates[0].uncertaintyNote);
+});
+
+console.log('\n5c. PDF line-reconstruction and page-boilerplate stripping (lib/pdfText.js)');
+await test('reconstructLines rebuilds real lines from hasEOL-delimited text items', () => {
+  const items = [
+    { str: 'Hotels', hasEOL: true },
+    { str: 'Dekeling Hotel ', hasEOL: false },
+    { str: 'Near Chowrasta', hasEOL: true },
+    { str: 'Muscatel Stardust', hasEOL: false },
+  ];
+  const lines = reconstructLines(items);
+  assert.deepEqual(lines, ['Hotels', 'Dekeling Hotel Near Chowrasta', 'Muscatel Stardust']);
+});
+
+await test('stripRepeatedPageBoilerplate removes a running header/footer across pages, keeps unique content', () => {
+  const pageLines = [
+    ['Darjeeling - The Complete Guide | 1/3', 'Tiger Hill', 'Batasia Loop'],
+    ['Darjeeling - The Complete Guide | 2/3', 'Ghum Monastery'],
+    ['Darjeeling - The Complete Guide | 3/3', 'Japanese Peace Pagoda'],
+  ];
+  const cleaned = stripRepeatedPageBoilerplate(pageLines);
+  assert.ok(!cleaned[0].some(l => l.includes('Complete Guide')));
+  assert.ok(!cleaned[1].some(l => l.includes('Complete Guide')));
+  assert.ok(!cleaned[2].some(l => l.includes('Complete Guide')));
+  assert.deepEqual(cleaned[0], ['Tiger Hill', 'Batasia Loop']);
+  assert.deepEqual(cleaned[1], ['Ghum Monastery']);
+});
+
+await test('stripRepeatedPageBoilerplate leaves short documents (fewer than 3 pages) untouched', () => {
+  const pageLines = [['Tiger Hill'], ['Batasia Loop']];
+  const cleaned = stripRepeatedPageBoilerplate(pageLines);
+  assert.deepEqual(cleaned, pageLines);
 });
 
 console.log('\n6. Full intake -> candidate -> review -> record flow');

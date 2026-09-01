@@ -20,7 +20,7 @@
 
 import assert from 'node:assert/strict';
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
-import { isTextUsable, MIN_USABLE_TEXT_CHARS } from '../../lib/pdfText.js';
+import { isTextUsable, MIN_USABLE_TEXT_CHARS, reconstructLines } from '../../lib/pdfText.js';
 
 let passed = 0, failed = 0;
 async function test(name, fn) {
@@ -106,6 +106,34 @@ await test('a real text-based PDF yields its actual embedded text (not empty, no
 await test('a PDF with no text layer (simulating scanned/image-only) yields no usable text', async () => {
   const text = await extractPageText(base64ToUint8Array(SCANNED_PDF_B64));
   assert.equal(isTextUsable(text), false, 'a PDF with an empty content stream must be rejected as not having selectable text');
+});
+
+// A minimal, real, multi-line PDF: three separate text runs at
+// different vertical positions within one page — used to prove
+// hasEOL-based line reconstruction (see lib/pdfText.js's
+// reconstructLines) against genuine pdfjs output, not just a synthetic
+// items array. This is the direct fix for the original bug: the
+// previous extraction joined all of a page's text with a single space
+// regardless of real line breaks, which is what let entire pages
+// collapse into one giant candidate.
+const MULTILINE_PDF_B64 = 'JVBERi0xLjQKMSAwIG9iajw8L1R5cGUvQ2F0YWxvZy9QYWdlcyAyIDAgUj4+ZW5kb2JqCjIgMCBvYmo8PC9UeXBlL1BhZ2VzL0tpZHNbMyAwIFJdL0NvdW50IDE+PmVuZG9iagozIDAgb2JqPDwvVHlwZS9QYWdlL1BhcmVudCAyIDAgUi9NZWRpYUJveFswIDAgMjAwIDIwMF0vUmVzb3VyY2VzPDwvRm9udDw8L0YxIDQgMCBSPj4+Pi9Db250ZW50cyA1IDAgUj4+ZW5kb2JqCjQgMCBvYmo8PC9UeXBlL0ZvbnQvU3VidHlwZS9UeXBlMS9CYXNlRm9udC9IZWx2ZXRpY2E+PmVuZG9iago1IDAgb2JqPDwvTGVuZ3RoIDEyNT4+CnN0cmVhbQpCVCAvRjEgMTIgVGYgMjAgMTgwIFRkIChIb3RlbHMpIFRqIDAgLTIwIFRkIChEZWtlbGluZyBIb3RlbCBOZWFyIENob3dyYXN0YSkgVGogMCAtMjAgVGQgKE11c2NhdGVsIFN0YXJkdXN0IENSIERhcyBSb2FkKSBUaiBFVAplbmRzdHJlYW0KZW5kb2JqCnhyZWYKMCA2CjAwMDAwMDAwMDAgNjU1MzUgZiAKMDAwMDAwMDAwOSAwMDAwMCBuIAowMDAwMDAwMDUyIDAwMDAwIG4gCjAwMDAwMDAxMDEgMDAwMDAgbiAKMDAwMDAwMDIxMSAwMDAwMCBuIAowMDAwMDAwMjcyIDAwMDAwIG4gCnRyYWlsZXI8PC9TaXplIDYvUm9vdCAxIDAgUj4+CnN0YXJ0eHJlZgo0NDUKJSVFT0Y=';
+
+console.log('\n3. Real multi-line PDF reconstruction (proves the original bug is fixed)');
+await test('a real PDF with three visually distinct lines reconstructs as three separate lines, not one collapsed blob', async () => {
+  const pdf = await getDocument({ data: base64ToUint8Array(MULTILINE_PDF_B64), isEvalSupported: false }).promise;
+  const page = await pdf.getPage(1);
+  const content = await page.getTextContent();
+  const lines = reconstructLines(content.items);
+  assert.equal(lines.length, 3, 'three visually distinct lines in the PDF should reconstruct as three separate lines');
+  assert.equal(lines[0], 'Hotels');
+  assert.equal(lines[1], 'Dekeling Hotel Near Chowrasta');
+  assert.equal(lines[2], 'Muscatel Stardust CR Das Road');
+  // Directly demonstrates what the OLD buggy extraction did wrong: a
+  // naive space-join of all items collapses these three distinct
+  // records into one line, which is exactly how a whole page previously
+  // became a single giant candidate.
+  const naiveJoin = content.items.map(i => i.str).join(' ');
+  assert.notEqual(naiveJoin, lines.join('\n'), 'sanity check: the naive join really is different from (worse than) proper reconstruction');
 });
 
 console.log(`\n=== ${passed} passed, ${failed} failed ===\n`);
