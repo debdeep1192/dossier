@@ -1,4 +1,6 @@
-import { NavLink, Outlet } from 'react-router-dom';
+import { useState } from 'react';
+import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import QuickAdd from './QuickAdd';
 import './AppShell.css';
 
 const NAV_ITEMS = [
@@ -10,6 +12,19 @@ const NAV_ITEMS = [
 // immediately while initial data loads), same pattern proven in the
 // previous Dossier.
 export default function AppShell({ children }) {
+  const navigate = useNavigate();
+  const [quickAddOpen, setQuickAddOpen] = useState(false);
+
+  // After a Quick Add save, jump to the destination it was saved
+  // under — the person immediately sees the record they just created,
+  // in context, rather than wondering whether it saved. Cached data
+  // for that destination/section was already invalidated by QuickAdd
+  // itself before this fires, so the destination page fetches fresh.
+  function handleQuickAddSaved(destinationId) {
+    setQuickAddOpen(false);
+    navigate(`/destinations/${destinationId}`);
+  }
+
   return (
     <div className="app-shell">
       <aside className="app-shell__sidebar">
@@ -17,6 +32,9 @@ export default function AppShell({ children }) {
           <span className="app-shell__brand-mark">D</span>
           <span className="app-shell__brand-name">Dossier</span>
         </div>
+        <button type="button" className="app-shell__quick-add" onClick={() => setQuickAddOpen(true)}>
+          + Add to Dossier
+        </button>
         <nav className="app-shell__sidebar-nav">
           {NAV_ITEMS.map(item => (
             <NavLink key={item.to} to={item.to} end className={({ isActive }) => `app-shell__sidebar-link ${isActive ? 'app-shell__sidebar-link--active' : ''}`}>
@@ -33,6 +51,10 @@ export default function AppShell({ children }) {
         </main>
       </div>
 
+      <button type="button" className="app-shell__fab" onClick={() => setQuickAddOpen(true)} aria-label="Add to Dossier">
+        +
+      </button>
+
       <nav className="app-shell__bottom-nav">
         {NAV_ITEMS.map(item => (
           <NavLink key={item.to} to={item.to} end className={({ isActive }) => `app-shell__bottom-link ${isActive ? 'app-shell__bottom-link--active' : ''}`}>
@@ -41,6 +63,8 @@ export default function AppShell({ children }) {
           </NavLink>
         ))}
       </nav>
+
+      <QuickAdd open={quickAddOpen} onClose={() => setQuickAddOpen(false)} onSaved={handleQuickAddSaved} />
     </div>
   );
 }

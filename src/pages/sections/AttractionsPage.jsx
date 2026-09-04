@@ -18,6 +18,9 @@ import { OpeningHoursField } from '../../components/OpeningHours';
 import { formatOpeningHours } from '../../lib/openingHours.js';
 import { EmptyState, LoadingState, ErrorState } from '../../components/States';
 import { ATTRACTION_CATEGORIES, BEST_TIME_OF_DAY_OPTIONS } from '../../lib/attractionOptions.js';
+import Disclosure from '../../components/Disclosure';
+import { hasAdvancedContent } from '../../lib/formHelpers.js';
+import { isMoneyEmpty } from '../../db/shared.js';
 
 export default function AttractionsPage() {
   const { destinationId } = useParams();
@@ -107,6 +110,20 @@ function AttractionForm({ destinationId, record, currencies, onAddCurrency, onCl
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
+  // Advanced fields are collapsed by default for a brand-new record
+  // (quick capture stays quick), but open by default whenever the
+  // record being edited already has any advanced data — an
+  // already-detailed record must never look artificially empty.
+  const advancedHasContent = hasAdvancedContent(
+    formatFeeBands(base.feeBands),
+    !isMoneyEmpty(base.cameraCharge),
+    !isMoneyEmpty(base.videographyCharge),
+    formatOpeningHours(base.openingHours),
+    base.typicallySpent,
+    base.bestTimeOfDay?.option,
+    base.priority,
+  );
+
   async function handleSubmit(e) {
     e.preventDefault();
     if (!place.name) { setError('Place name is required.'); return; }
@@ -138,40 +155,42 @@ function AttractionForm({ destinationId, record, currencies, onAddCurrency, onCl
           <option value="">Choose a category…</option>
           {ATTRACTION_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
         </Select>
+        <TextArea label="Notes" value={description} onChange={e => setDescription(e.target.value)} rows={3} placeholder="A quick note is enough to save this — add fees, hours, and other details below if you have them." />
 
-        <FeeBandsField bands={feeBands} onChange={setFeeBands} currencies={currencies} onAddCurrency={onAddCurrency} />
+        <Disclosure label="Add more details" defaultOpen={advancedHasContent}>
+          <FeeBandsField bands={feeBands} onChange={setFeeBands} currencies={currencies} onAddCurrency={onAddCurrency} />
 
-        <label className="attraction-form__toggle">
-          <input type="checkbox" checked={hasCameraCharge} onChange={e => setHasCameraCharge(e.target.checked)} />
-          <span>Camera charge</span>
-        </label>
-        {hasCameraCharge && <MoneyField label="" value={cameraCharge} onChange={setCameraCharge} currencies={currencies} onAddCurrency={onAddCurrency} />}
+          <label className="attraction-form__toggle">
+            <input type="checkbox" checked={hasCameraCharge} onChange={e => setHasCameraCharge(e.target.checked)} />
+            <span>Camera charge</span>
+          </label>
+          {hasCameraCharge && <MoneyField label="" value={cameraCharge} onChange={setCameraCharge} currencies={currencies} onAddCurrency={onAddCurrency} />}
 
-        <label className="attraction-form__toggle">
-          <input type="checkbox" checked={hasVideographyCharge} onChange={e => setHasVideographyCharge(e.target.checked)} />
-          <span>Videography charge</span>
-        </label>
-        {hasVideographyCharge && <MoneyField label="" value={videographyCharge} onChange={setVideographyCharge} currencies={currencies} onAddCurrency={onAddCurrency} />}
+          <label className="attraction-form__toggle">
+            <input type="checkbox" checked={hasVideographyCharge} onChange={e => setHasVideographyCharge(e.target.checked)} />
+            <span>Videography charge</span>
+          </label>
+          {hasVideographyCharge && <MoneyField label="" value={videographyCharge} onChange={setVideographyCharge} currencies={currencies} onAddCurrency={onAddCurrency} />}
 
-        <OpeningHoursField value={openingHours} onChange={setOpeningHours} />
+          <OpeningHoursField value={openingHours} onChange={setOpeningHours} />
 
-        <Input label="Typically spent" value={typicallySpent} onChange={e => setTypicallySpent(e.target.value)} placeholder="e.g. 1-2 hours" hint="How long visitors normally spend here — not a fixed itinerary duration." />
+          <Input label="Typically spent" value={typicallySpent} onChange={e => setTypicallySpent(e.target.value)} placeholder="e.g. 1-2 hours" hint="How long visitors normally spend here — not a fixed itinerary duration." />
 
-        <Select label="Best time of day" value={bestTimeOption} onChange={e => setBestTimeOption(e.target.value)}>
-          <option value="">Not specified</option>
-          {BEST_TIME_OF_DAY_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
-        </Select>
-        {bestTimeOption === 'Other' && <Input placeholder="Describe the best time" value={bestTimeNote} onChange={e => setBestTimeNote(e.target.value)} />}
+          <Select label="Best time of day" value={bestTimeOption} onChange={e => setBestTimeOption(e.target.value)}>
+            <option value="">Not specified</option>
+            {BEST_TIME_OF_DAY_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+          </Select>
+          {bestTimeOption === 'Other' && <Input placeholder="Describe the best time" value={bestTimeNote} onChange={e => setBestTimeNote(e.target.value)} />}
 
-        <TextArea label="Notes" value={description} onChange={e => setDescription(e.target.value)} rows={3} />
+          <Select label="Priority" value={priority} onChange={e => setPriority(e.target.value)}>
+            <option value="">No priority set</option>
+            <option value="must_know">Must Know</option>
+            <option value="useful">Useful</option>
+            <option value="optional">Optional</option>
+            <option value="reference">Reference</option>
+          </Select>
+        </Disclosure>
 
-        <Select label="Priority" value={priority} onChange={e => setPriority(e.target.value)}>
-          <option value="">No priority set</option>
-          <option value="must_know">Must Know</option>
-          <option value="useful">Useful</option>
-          <option value="optional">Optional</option>
-          <option value="reference">Reference</option>
-        </Select>
         {error && <p className="form-error" role="alert">{error}</p>}
         <Button type="submit" fullWidth disabled={submitting}>{submitting ? 'Saving…' : 'Save'}</Button>
       </form>

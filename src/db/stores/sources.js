@@ -20,6 +20,7 @@ export async function createSource(destinationId, fields) {
   const record = {
     id: newId(),
     destinationId,
+    locationId: null, // sources are destination-wide by convention; not currently location-scoped
     ...emptySource(),
     ...fields,
     createdAt: now,

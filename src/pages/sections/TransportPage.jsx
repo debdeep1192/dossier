@@ -13,6 +13,9 @@ import { PriorityBadge } from '../../components/Badge';
 import { MoneyField, MoneyDisplay } from '../../components/Money';
 import { EmptyState, LoadingState, ErrorState } from '../../components/States';
 import { TRANSPORT_MODES, TRANSPORT_DEFAULT_UNIT_BY_MODE, TRANSPORT_PRICE_UNITS } from '../../lib/priceUnits.js';
+import Disclosure from '../../components/Disclosure';
+import { hasAdvancedContent } from '../../lib/formHelpers.js';
+import { isMoneyEmpty } from '../../db/shared.js';
 
 export default function TransportPage() {
   const { destinationId } = useParams();
@@ -88,6 +91,13 @@ function TransportForm({ destinationId, record, currencies, onAddCurrency, onClo
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
+  const advancedHasContent = hasAdvancedContent(
+    !isMoneyEmpty(base.price),
+    base.duration,
+    base.schedule,
+    base.priority,
+  );
+
   function handleModeChange(newMode) {
     setMode(newMode);
     // Only auto-set the unit when the price doesn't already have one —
@@ -131,17 +141,21 @@ function TransportForm({ destinationId, record, currencies, onAddCurrency, onClo
           <option value="">Choose a mode…</option>
           {TRANSPORT_MODES.map(m => <option key={m} value={m}>{m}</option>)}
         </Select>
-        <MoneyField value={price} onChange={setPrice} currencies={currencies} defaultCurrency="INR" unitOptions={TRANSPORT_PRICE_UNITS} defaultUnit={TRANSPORT_DEFAULT_UNIT_BY_MODE[mode] || 'Per person'} onAddCurrency={onAddCurrency} />
-        <Input label="Duration" value={duration} onChange={e => setDuration(e.target.value)} placeholder="e.g. 3 hours" />
-        <Input label="Schedule / frequency" value={schedule} onChange={e => setSchedule(e.target.value)} />
-        <TextArea label="Booking notes" value={bookingNotes} onChange={e => setBookingNotes(e.target.value)} rows={2} />
-        <Select label="Priority" value={priority} onChange={e => setPriority(e.target.value)}>
-          <option value="">No priority set</option>
-          <option value="must_know">Must Know</option>
-          <option value="useful">Useful</option>
-          <option value="optional">Optional</option>
-          <option value="reference">Reference</option>
-        </Select>
+        <TextArea label="Booking notes" value={bookingNotes} onChange={e => setBookingNotes(e.target.value)} rows={2} placeholder="A quick note is enough to save this — add price, duration, and schedule below if you have them." />
+
+        <Disclosure label="Add more details" defaultOpen={advancedHasContent}>
+          <MoneyField value={price} onChange={setPrice} currencies={currencies} defaultCurrency="INR" unitOptions={TRANSPORT_PRICE_UNITS} defaultUnit={TRANSPORT_DEFAULT_UNIT_BY_MODE[mode] || 'Per person'} onAddCurrency={onAddCurrency} />
+          <Input label="Duration" value={duration} onChange={e => setDuration(e.target.value)} placeholder="e.g. 3 hours" />
+          <Input label="Schedule / frequency" value={schedule} onChange={e => setSchedule(e.target.value)} />
+          <Select label="Priority" value={priority} onChange={e => setPriority(e.target.value)}>
+            <option value="">No priority set</option>
+            <option value="must_know">Must Know</option>
+            <option value="useful">Useful</option>
+            <option value="optional">Optional</option>
+            <option value="reference">Reference</option>
+          </Select>
+        </Disclosure>
+
         {error && <p className="form-error" role="alert">{error}</p>}
         <Button type="submit" fullWidth disabled={submitting}>{submitting ? 'Saving…' : 'Save'}</Button>
       </form>

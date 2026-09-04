@@ -69,6 +69,38 @@
   font-weight: 600;
 }
 
+/* ---- Global "+ Add to Dossier" entry point ---- */
+/* Floating action button: mobile/default, sits above the bottom nav. */
+.app-shell__fab {
+  position: fixed;
+  right: var(--space-4);
+  bottom: calc(var(--nav-height-mobile) + var(--space-4));
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: var(--color-teal);
+  color: white;
+  border: none;
+  font-size: 28px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--shadow-md);
+  cursor: pointer;
+  z-index: 41;
+  transition: transform var(--transition-fast), background-color var(--transition-fast);
+}
+.app-shell__fab:hover {
+  background: var(--color-teal-dark);
+  transform: scale(1.04);
+}
+
+/* Sidebar button: desktop only, hidden until the sidebar itself shows. */
+.app-shell__quick-add {
+  display: none;
+}
+
 /* ---- Desktop layout ---- */
 @media (min-width: 900px) {
   .app-shell {
@@ -116,6 +148,24 @@
     font-size: var(--text-lg);
   }
 
+  .app-shell__quick-add {
+    display: block;
+    width: 100%;
+    padding: var(--space-3);
+    margin-bottom: var(--space-4);
+    border: none;
+    border-radius: var(--radius-md);
+    background: var(--color-teal);
+    color: white;
+    font-weight: 600;
+    font-size: var(--text-sm);
+    cursor: pointer;
+    transition: background-color var(--transition-fast);
+  }
+  .app-shell__quick-add:hover {
+    background: var(--color-teal-dark);
+  }
+
   .app-shell__sidebar-nav {
     display: flex;
     flex-direction: column;
@@ -155,6 +205,10 @@
   }
 
   .app-shell__bottom-nav {
+    display: none;
+  }
+
+  .app-shell__fab {
     display: none;
   }
 }

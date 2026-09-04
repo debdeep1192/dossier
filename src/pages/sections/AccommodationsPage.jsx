@@ -14,6 +14,9 @@ import { PlaceField, PlaceSummary } from '../../components/Place';
 import { MoneyField, MoneyDisplay } from '../../components/Money';
 import { EmptyState, LoadingState, ErrorState } from '../../components/States';
 import { ACCOMMODATION_TYPES, ACCOMMODATION_PRICE_BASIS, ACCOMMODATION_DEFAULT_PRICE_BASIS } from '../../lib/priceUnits.js';
+import Disclosure from '../../components/Disclosure';
+import { hasAdvancedContent } from '../../lib/formHelpers.js';
+import { isMoneyEmpty } from '../../db/shared.js';
 
 export default function AccommodationsPage() {
   const { destinationId } = useParams();
@@ -89,6 +92,14 @@ function AccommodationForm({ destinationId, record, currencies, onAddCurrency, o
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
+  const advancedHasContent = hasAdvancedContent(
+    !isMoneyEmpty(base.price),
+    base.roomType,
+    base.checkIn,
+    base.checkOut,
+    base.priority,
+  );
+
   async function handleSubmit(e) {
     e.preventDefault();
     if (!place.name) { setError('Place name is required.'); return; }
@@ -114,29 +125,33 @@ function AccommodationForm({ destinationId, record, currencies, onAddCurrency, o
           <option value="">Choose a type…</option>
           {ACCOMMODATION_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
         </Select>
-        <MoneyField
-          label="Price"
-          value={price}
-          onChange={setPrice}
-          currencies={currencies}
-          defaultCurrency="INR"
-          unitOptions={ACCOMMODATION_PRICE_BASIS}
-          defaultUnit={ACCOMMODATION_DEFAULT_PRICE_BASIS}
-          onAddCurrency={onAddCurrency}
-        />
-        <Input label="Room type" value={roomType} onChange={e => setRoomType(e.target.value)} />
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-2)' }}>
-          <Input label="Check-in" value={checkIn} onChange={e => setCheckIn(e.target.value)} placeholder="e.g. 2 PM" />
-          <Input label="Check-out" value={checkOut} onChange={e => setCheckOut(e.target.value)} placeholder="e.g. 11 AM" />
-        </div>
-        <TextArea label="Amenity notes" value={amenityNotes} onChange={e => setAmenityNotes(e.target.value)} rows={2} />
-        <Select label="Priority" value={priority} onChange={e => setPriority(e.target.value)}>
-          <option value="">No priority set</option>
-          <option value="must_know">Must Know</option>
-          <option value="useful">Useful</option>
-          <option value="optional">Optional</option>
-          <option value="reference">Reference</option>
-        </Select>
+        <TextArea label="Amenity notes" value={amenityNotes} onChange={e => setAmenityNotes(e.target.value)} rows={2} placeholder="A quick note is enough to save this — add price, room type, and other details below if you have them." />
+
+        <Disclosure label="Add more details" defaultOpen={advancedHasContent}>
+          <MoneyField
+            label="Price"
+            value={price}
+            onChange={setPrice}
+            currencies={currencies}
+            defaultCurrency="INR"
+            unitOptions={ACCOMMODATION_PRICE_BASIS}
+            defaultUnit={ACCOMMODATION_DEFAULT_PRICE_BASIS}
+            onAddCurrency={onAddCurrency}
+          />
+          <Input label="Room type" value={roomType} onChange={e => setRoomType(e.target.value)} />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-2)' }}>
+            <Input label="Check-in" value={checkIn} onChange={e => setCheckIn(e.target.value)} placeholder="e.g. 2 PM" />
+            <Input label="Check-out" value={checkOut} onChange={e => setCheckOut(e.target.value)} placeholder="e.g. 11 AM" />
+          </div>
+          <Select label="Priority" value={priority} onChange={e => setPriority(e.target.value)}>
+            <option value="">No priority set</option>
+            <option value="must_know">Must Know</option>
+            <option value="useful">Useful</option>
+            <option value="optional">Optional</option>
+            <option value="reference">Reference</option>
+          </Select>
+        </Disclosure>
+
         {error && <p className="form-error" role="alert">{error}</p>}
         <Button type="submit" fullWidth disabled={submitting}>{submitting ? 'Saving…' : 'Save'}</Button>
       </form>

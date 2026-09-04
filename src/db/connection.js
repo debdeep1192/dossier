@@ -20,12 +20,17 @@
 
 const DB_NAME = 'dossier';
 // v1 -> v2: added shoppingItems/shops (Shopping section) and
-// exchangeRates (currency system) object stores. onupgradeneeded's
-// "create if missing" loop below means this is a purely additive
-// upgrade — existing stores and their data are completely untouched;
-// only the new stores get created for anyone opening an existing v1
-// database.
-const DB_VERSION = 2;
+// exchangeRates (currency system) object stores.
+// v2 -> v3: added the `locations` store (flexible sub-destination
+// entities — city/town/island/region/etc, see db/stores/locations.js).
+// Existing section records gain an optional `locationId` field going
+// forward (via commonMetadata), but nothing here touches records
+// already on disk — a record with no `locationId` key is read as
+// destination-wide, exactly as if it had `locationId: null`. Purely
+// additive, same as v1->v2: onupgradeneeded's "create if missing" loop
+// below means upgrading only ever adds the new store; every existing
+// store and its data is left completely untouched.
+const DB_VERSION = 3;
 
 // One object store per research section (each a genuinely distinct
 // shape defined in db/stores/*.js — never a shared "item_kind" bucket),
@@ -33,6 +38,7 @@ const DB_VERSION = 2;
 // documents, review candidates).
 const STORE_DEFS = [
   { name: 'destinations', keyPath: 'id', indexes: [] },
+  { name: 'locations', keyPath: 'id', indexes: [['destinationId', 'destinationId']] },
   { name: 'sources', keyPath: 'id', indexes: [['destinationId', 'destinationId']] },
   { name: 'attractions', keyPath: 'id', indexes: [['destinationId', 'destinationId']] },
   { name: 'restaurants', keyPath: 'id', indexes: [['destinationId', 'destinationId']] },

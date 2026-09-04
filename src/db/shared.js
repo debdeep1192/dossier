@@ -51,11 +51,18 @@ export function isMoneyEmpty(money) {
 // section, per the "no artificial fields" instruction. A caller spreads
 // this alongside a section's own fields; it is metadata about the
 // record, not the record's content.
-export function commonMetadata({ destinationId }) {
+export function commonMetadata({ destinationId, locationId }) {
   const now = new Date().toISOString();
   return {
     id: crypto.randomUUID(),
     destinationId,
+    // null (the default) means "applies to the whole destination".
+    // A record created before Locations existed simply has no
+    // `locationId` key at all — reading `record.locationId` on such a
+    // record gives `undefined`, which every call site in this app
+    // treats the same as `null` (destination-wide). See
+    // db/stores/locations.js.
+    locationId: locationId ?? null,
     priority: null, // 'must_know' | 'useful' | 'optional' | 'reference' | null
     sourceIds: [],
     provenance: 'manual', // 'manual' | 'imported'

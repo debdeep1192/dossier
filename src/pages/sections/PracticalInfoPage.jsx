@@ -10,6 +10,8 @@ import Modal from '../../components/Modal';
 import { Input, TextArea, Select } from '../../components/Field';
 import { EmptyState, LoadingState, ErrorState } from '../../components/States';
 import { PRACTICAL_INFO_TOPICS } from '../../lib/practicalInfoOptions.js';
+import Disclosure from '../../components/Disclosure';
+import { hasAdvancedContent } from '../../lib/formHelpers.js';
 
 export default function PracticalInfoPage() {
   const { destinationId } = useParams();
@@ -66,7 +68,6 @@ export default function PracticalInfoPage() {
 function PracticalInfoForm({ destinationId, record, onClose, onSaved }) {
   const base = record || emptyPracticalInfoEntry();
   const [topic, setTopic] = useState(base.topic || '');
-  const [showContactFields, setShowContactFields] = useState(Boolean(base.name || base.phone || base.email || base.website || base.address || base.googleMapsUrl));
   const [name, setName] = useState(base.name || '');
   const [location, setLocation] = useState(base.location || '');
   const [address, setAddress] = useState(base.address || '');
@@ -77,6 +78,8 @@ function PracticalInfoForm({ destinationId, record, onClose, onSaved }) {
   const [details, setDetails] = useState(base.details || '');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  const advancedHasContent = hasAdvancedContent(base.name, base.phone, base.email, base.website, base.address, base.googleMapsUrl);
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -105,21 +108,17 @@ function PracticalInfoForm({ destinationId, record, onClose, onSaved }) {
 
         <TextArea label="Details / Notes" value={details} onChange={e => setDetails(e.target.value)} rows={4} placeholder="e.g. Airtel works reasonably well in central Darjeeling…" />
 
-        {!showContactFields ? (
-          <button type="button" className="checkbox-toggle" onClick={() => setShowContactFields(true)}>+ Add a specific contact (name, phone, address…)</button>
-        ) : (
-          <>
-            <Input label="Name" value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Darjeeling Police" />
-            <Input label="Location" value={location} onChange={e => setLocation(e.target.value)} />
-            <Input label="Address" value={address} onChange={e => setAddress(e.target.value)} />
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-2)' }}>
-              <Input label="Phone" value={phone} onChange={e => setPhone(e.target.value)} />
-              <Input label="Email" value={email} onChange={e => setEmail(e.target.value)} />
-            </div>
-            <Input label="Website" value={website} onChange={e => setWebsite(e.target.value)} placeholder="https://…" />
-            <Input label="Google Maps link" value={googleMapsUrl} onChange={e => setGoogleMapsUrl(e.target.value)} placeholder="https://…" />
-          </>
-        )}
+        <Disclosure label="Add a specific contact (name, phone, address…)" defaultOpen={advancedHasContent}>
+          <Input label="Name" value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Darjeeling Police" />
+          <Input label="Location" value={location} onChange={e => setLocation(e.target.value)} />
+          <Input label="Address" value={address} onChange={e => setAddress(e.target.value)} />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-2)' }}>
+            <Input label="Phone" value={phone} onChange={e => setPhone(e.target.value)} />
+            <Input label="Email" value={email} onChange={e => setEmail(e.target.value)} />
+          </div>
+          <Input label="Website" value={website} onChange={e => setWebsite(e.target.value)} placeholder="https://…" />
+          <Input label="Google Maps link" value={googleMapsUrl} onChange={e => setGoogleMapsUrl(e.target.value)} placeholder="https://…" />
+        </Disclosure>
 
         {error && <p className="form-error" role="alert">{error}</p>}
         <Button type="submit" fullWidth disabled={submitting}>{submitting ? 'Saving…' : 'Save'}</Button>

@@ -10,6 +10,8 @@ import Modal from '../../components/Modal';
 import { Input, TextArea, Select } from '../../components/Field';
 import { EmptyState, LoadingState, ErrorState } from '../../components/States';
 import { WEATHER_PRECIPITATION_LEVELS, WEATHER_RECOMMENDATIONS, MONTHS } from '../../lib/weatherOptions.js';
+import Disclosure from '../../components/Disclosure';
+import { hasAdvancedContent } from '../../lib/formHelpers.js';
 
 const RECOMMENDATION_LABEL = Object.fromEntries(WEATHER_RECOMMENDATIONS.map(r => [r.value, r.label]));
 
@@ -84,6 +86,13 @@ function WeatherForm({ destinationId, record, onClose, onSaved }) {
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
+  const advancedHasContent = hasAdvancedContent(
+    base.temperatureMin, base.temperatureMax,
+    base.rain && base.rain !== 'Rare',
+    base.snow && base.snow !== 'Rare',
+    base.recommendation,
+  );
+
   function handlePresetPick(e) {
     const v = e.target.value;
     if (v) setPeriod(v);
@@ -114,30 +123,32 @@ function WeatherForm({ destinationId, record, onClose, onSaved }) {
           {MONTHS.map(m => <option key={m} value={m}>{m}</option>)}
         </Select>
         <Input label="Period" required value={period} onChange={e => setPeriod(e.target.value)} placeholder="e.g. December–February, or a single month" />
+        <TextArea label="Description" value={description} onChange={e => setDescription(e.target.value)} rows={3} placeholder="A quick note is enough to save this — add temperature, rain/snow, and a recommendation below if you have them." />
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 'var(--space-2)' }}>
-          <Input label="Min temp" type="number" value={temperatureMin} onChange={e => setTemperatureMin(e.target.value)} />
-          <Input label="Max temp" type="number" value={temperatureMax} onChange={e => setTemperatureMax(e.target.value)} />
-          <Select label="Unit" value={temperatureUnit} onChange={e => setTemperatureUnit(e.target.value)}>
-            <option value="C">°C</option>
-            <option value="F">°F</option>
+        <Disclosure label="Add more details" defaultOpen={advancedHasContent}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 'var(--space-2)' }}>
+            <Input label="Min temp" type="number" value={temperatureMin} onChange={e => setTemperatureMin(e.target.value)} />
+            <Input label="Max temp" type="number" value={temperatureMax} onChange={e => setTemperatureMax(e.target.value)} />
+            <Select label="Unit" value={temperatureUnit} onChange={e => setTemperatureUnit(e.target.value)}>
+              <option value="C">°C</option>
+              <option value="F">°F</option>
+            </Select>
+          </div>
+
+          <Select label="Rain" value={rain} onChange={e => setRain(e.target.value)}>
+            {WEATHER_PRECIPITATION_LEVELS.map(l => <option key={l} value={l}>{l}</option>)}
           </Select>
-        </div>
+          <Select label="Snow" value={snow} onChange={e => setSnow(e.target.value)}>
+            {WEATHER_PRECIPITATION_LEVELS.map(l => <option key={l} value={l}>{l}</option>)}
+          </Select>
 
-        <Select label="Rain" value={rain} onChange={e => setRain(e.target.value)}>
-          {WEATHER_PRECIPITATION_LEVELS.map(l => <option key={l} value={l}>{l}</option>)}
-        </Select>
-        <Select label="Snow" value={snow} onChange={e => setSnow(e.target.value)}>
-          {WEATHER_PRECIPITATION_LEVELS.map(l => <option key={l} value={l}>{l}</option>)}
-        </Select>
+          <Select label="Recommendation" value={recommendation} onChange={e => setRecommendation(e.target.value)}>
+            <option value="">Not set</option>
+            {WEATHER_RECOMMENDATIONS.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
+          </Select>
+          <TextArea label="Recommendation notes (optional)" value={recommendationNotes} onChange={e => setRecommendationNotes(e.target.value)} rows={2} />
+        </Disclosure>
 
-        <Select label="Recommendation" value={recommendation} onChange={e => setRecommendation(e.target.value)}>
-          <option value="">Not set</option>
-          {WEATHER_RECOMMENDATIONS.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
-        </Select>
-        <TextArea label="Recommendation notes (optional)" value={recommendationNotes} onChange={e => setRecommendationNotes(e.target.value)} rows={2} />
-
-        <TextArea label="Description" value={description} onChange={e => setDescription(e.target.value)} rows={3} />
         {error && <p className="form-error" role="alert">{error}</p>}
         <Button type="submit" fullWidth disabled={submitting}>{submitting ? 'Saving…' : 'Save'}</Button>
       </form>

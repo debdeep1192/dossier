@@ -23,6 +23,8 @@ import { emptyFeeBand, formatFeeBands } from '../../lib/feeBands.js';
 import { formatOpeningHours } from '../../lib/openingHours.js';
 import { CORE_CURRENCIES, getCurrencyOptions, addDestinationCurrency, setExchangeRate, getExchangeRate, convertAmount } from '../currency.js';
 import { createShoppingItem } from '../stores/shoppingItems.js';
+import { createLocation, listLocations, updateLocation, deleteLocation, getLocation } from '../stores/locations.js';
+import { createPracticalInfoEntry, listPracticalInfoEntries } from '../stores/practicalInfo.js';
 
 let passed = 0, failed = 0;
 async function test(name, fn) {
@@ -747,6 +749,133 @@ await test('opening a v1 database with v2 code adds new stores without touching 
   assert.ok(shoppingItem.id);
   await setExchangeRate('THB', 'INR', 2.6);
   assert.equal(await getExchangeRate('THB', 'INR'), 2.6);
+});
+
+console.log('\n15. Locations — flexible sub-destinations, additive to existing records');
+await test('a location can be created, listed, edited, and soft-deleted', async () => {
+  const dest = await createDestination({ name: 'Thailand' });
+  const loc = await createLocation(dest.id, { name: 'Bangkok' });
+  assert.equal(loc.name, 'Bangkok');
+  assert.equal(loc.destinationId, dest.id);
+
+  const list1 = await listLocations(dest.id);
+  assert.equal(list1.length, 1);
+
+  const updated = await updateLocation(loc.id, { name: 'Bangkok (renamed)' });
+  assert.equal(updated.name, 'Bangkok (renamed)');
+
+  await deleteLocation(loc.id);
+  const list2 = await listLocations(dest.id);
+  assert.equal(list2.length, 0, 'soft-deleted location should not appear in list');
+  assert.equal(await getLocation(loc.id), null);
+});
+
+await test('creating a location without a name is rejected', async () => {
+  const dest = await createDestination({ name: 'Thailand' });
+  await assert.rejects(() => createLocation(dest.id, { name: '' }));
+  await assert.rejects(() => createLocation(dest.id, {}));
+});
+
+await test('a destination can have multiple locations, listed alphabetically', async () => {
+  const dest = await createDestination({ name: 'Thailand' });
+  await createLocation(dest.id, { name: 'Phuket' });
+  await createLocation(dest.id, { name: 'Bangkok' });
+  await createLocation(dest.id, { name: 'Chiang Mai' });
+  const list = await listLocations(dest.id);
+  assert.deepEqual(list.map(l => l.name), ['Bangkok', 'Chiang Mai', 'Phuket']);
+});
+
+await test('a new research record defaults to locationId: null (destination-wide)', async () => {
+  const dest = await createDestination({ name: 'Thailand' });
+  const item = await createAttraction(dest.id, { place: { name: 'Grand Palace' } });
+  assert.equal(item.locationId, null, 'a record created with no locationId should default to destination-wide');
+});
+
+await test('a research record can be scoped to a specific location', async () => {
+  const dest = await createDestination({ name: 'Thailand' });
+  const bangkok = await createLocation(dest.id, { name: 'Bangkok' });
+  const item = await createAttraction(dest.id, { place: { name: 'Grand Palace' }, locationId: bangkok.id });
+  assert.equal(item.locationId, bangkok.id);
+
+  const dishEntry = await createRestaurantEntry(dest.id, { dishName: 'Pad Thai', locationId: bangkok.id });
+  assert.equal(dishEntry.locationId, bangkok.id);
+});
+
+await test('destination-wide and location-specific records coexist for the same destination', async () => {
+  const dest = await createDestination({ name: 'Thailand' });
+  const bangkok = await createLocation(dest.id, { name: 'Bangkok' });
+  await createPracticalInfoEntry(dest.id, { topic: 'Visa' }); // destination-wide (no locationId given)
+  await createAttraction(dest.id, { place: { name: 'Grand Palace' }, locationId: bangkok.id }); // location-specific
+
+  const allAttractions = await listAttractions(dest.id);
+  const allPracticalInfo = await listPracticalInfoEntries(dest.id);
+  assert.equal(allAttractions.length, 1);
+  assert.equal(allAttractions[0].locationId, bangkok.id);
+  assert.equal(allPracticalInfo.length, 1);
+  assert.equal(allPracticalInfo[0].locationId, null, 'visa info with no location chosen should be destination-wide');
+});
+
+await test('a destination with no locations continues to work exactly as before', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka (single-place trip)' });
+  const locations = await listLocations(dest.id);
+  assert.equal(locations.length, 0);
+  const item = await createAttraction(dest.id, { place: { name: 'Sigiriya' } });
+  assert.equal(item.locationId, null);
+  const list = await listAttractions(dest.id);
+  assert.equal(list.length, 1, 'attraction should be listed normally even though the destination has no locations');
+});
+
+console.log('\n16. Database version upgrade (v2 -> v3) preserves existing data, including records with no locationId');
+await test('opening a v2 database with v3 code adds the locations store without touching existing data', async () => {
+  // Simulate a v2 database (all stores through exchangeRates, but no
+  // `locations` store and no `locationId` on any existing record —
+  // exactly what a real user's pre-Phase-1 database looks like).
+  const v2StoreNames = [
+    'destinations', 'sources', 'attractions', 'restaurants', 'accommodations', 'transport',
+    'costs', 'practicalInfo', 'weatherNotes', 'packingNotes', 'generalNotes',
+    'shoppingItems', 'shops', 'exchangeRates', 'intakeDocuments', 'candidates',
+  ];
+  const v2Db = await new Promise((resolve, reject) => {
+    const req = globalThis.indexedDB.open('dossier', 2);
+    req.onupgradeneeded = (event) => {
+      const db = event.target.result;
+      for (const name of v2StoreNames) {
+        const store = db.createObjectStore(name, { keyPath: 'id' });
+        if (name !== 'destinations' && name !== 'exchangeRates') store.createIndex('destinationId', 'destinationId');
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  await new Promise((resolve, reject) => {
+    const tx = v2Db.transaction(['destinations', 'attractions'], 'readwrite');
+    tx.objectStore('destinations').put({ id: 'existing-dest-2', name: 'Pre-Phase-1 Destination', currencies: [] });
+    // A real pre-Phase-1 attraction record: no `locationId` key at all.
+    tx.objectStore('attractions').put({
+      id: 'existing-attraction-1', destinationId: 'existing-dest-2',
+      place: { name: 'Old Record Place' }, provenance: 'manual', deletedAt: null,
+    });
+    tx.oncomplete = resolve;
+    tx.onerror = reject;
+  });
+  v2Db.close();
+
+  // Reopen with the real application code (getDb -> v3).
+  __resetDbForTest();
+  const destination = await getDestination('existing-dest-2');
+  assert.ok(destination, 'pre-existing v2 data must survive the v2->v3 upgrade');
+  assert.equal(destination.name, 'Pre-Phase-1 Destination');
+
+  const oldAttractions = await listAttractions('existing-dest-2');
+  assert.equal(oldAttractions.length, 1, 'pre-existing attraction (no locationId field) must still be listed');
+  assert.equal(oldAttractions[0].locationId, undefined, 'an old record is never rewritten to add a locationId key');
+
+  // New v3-only functionality (Locations) must now work against this
+  // upgraded database, and coexist with the untouched old record.
+  const location = await createLocation('existing-dest-2', { name: 'Kandy' });
+  assert.ok(location.id);
+  const locations = await listLocations('existing-dest-2');
+  assert.equal(locations.length, 1);
 });
 
 console.log(`\n=== ${passed} passed, ${failed} failed ===\n`);
