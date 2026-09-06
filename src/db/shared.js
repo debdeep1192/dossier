@@ -51,6 +51,14 @@ export function isMoneyEmpty(money) {
 // section, per the "no artificial fields" instruction. A caller spreads
 // this alongside a section's own fields; it is metadata about the
 // record, not the record's content.
+//
+// Does NOT include a "between two cities" field: that concept is
+// real (see db/stores/locations.js -> JOURNEY_LOCATION_ID), but it is
+// deliberately NOT part of every record's shared default shape. Only
+// the sections where a journey/between-cities context genuinely makes
+// sense (Transport, Attractions) opt into it explicitly in their own
+// field list — see the "Journey representation" note in
+// db/stores/locations.js for the reasoning.
 export function commonMetadata({ destinationId, locationId }) {
   const now = new Date().toISOString();
   return {

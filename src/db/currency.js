@@ -26,6 +26,28 @@ import { getDestination, updateDestination } from './stores/destinations.js';
 
 export const CORE_CURRENCIES = ['INR', 'USD'];
 
+// The destination's user-selected default currency — item 11/12 of the
+// spec. This ONLY controls what a new monetary field defaults to; it
+// never touches any already-saved record's own `price.currency` (a
+// record's stored currency is a completely separate field, set once
+// at entry and never rewritten by anything in this file — see
+// convertAmount() below). A destination saved before this field
+// existed has no `defaultCurrency` key at all; treated as 'INR' here,
+// matching "INR is the default currency unless otherwise specified."
+export function getDestinationDefaultCurrency(destination) {
+  return destination?.defaultCurrency || 'INR';
+}
+
+export async function setDestinationDefaultCurrency(destinationId, code) {
+  const normalized = code.trim().toUpperCase();
+  if (!normalized) throw new Error('Choose a currency.');
+  // Changing the default also ensures it's available as an option
+  // going forward (a person choosing KGS as Kyrgyzstan's default
+  // should not then have to separately "add" KGS as a usable currency).
+  await addDestinationCurrency(destinationId, normalized);
+  return updateDestination(destinationId, { defaultCurrency: normalized });
+}
+
 // Returns the full set of currency codes that should be offered for a
 // given destination: the two core currencies (always present, always
 // first) plus whatever the destination has added, deduplicated.

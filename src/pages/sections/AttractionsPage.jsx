@@ -1,8 +1,10 @@
 import { useState, useCallback } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import { getDestination } from '../../db/stores/destinations';
 import { listAttractions, createAttraction, updateAttraction, deleteAttraction, emptyAttraction, normalizeAttraction } from '../../db/stores/attractions';
-import { addDestinationCurrency, getCurrencyOptions } from '../../db/currency.js';
+import { listLocations, describeLocationContext } from '../../db/stores/locations';
+import { listJourneys, describeJourney } from '../../db/stores/journeys';
+import { addDestinationCurrency, getCurrencyOptions, getDestinationDefaultCurrency } from '../../db/currency.js';
 import { useCachedQuery, invalidateCachedQuery, invalidateCachedQueryPrefix } from '../../hooks/useCachedQuery';
 import SectionPageLayout from '../../components/SectionPageLayout';
 import Card from '../../components/Card';
@@ -21,14 +23,22 @@ import { ATTRACTION_CATEGORIES, BEST_TIME_OF_DAY_OPTIONS } from '../../lib/attra
 import Disclosure from '../../components/Disclosure';
 import { hasAdvancedContent } from '../../lib/formHelpers.js';
 import { isMoneyEmpty } from '../../db/shared.js';
+import LocationScopeField from '../../components/LocationScopeField';
+import JourneyField from '../../components/JourneyField';
+import OtherSelect from '../../components/OtherSelect';
+import { CATEGORY_HINTS } from '../../lib/placeLookup.js';
 
 export default function AttractionsPage() {
   const { destinationId } = useParams();
+  const [searchParams] = useSearchParams();
+  const contextLocationId = searchParams.get('location') || null;
   const [editing, setEditing] = useState(null);
 
   const fetcher = useCallback(async () => {
-    const [destination, rawItems] = await Promise.all([getDestination(destinationId), listAttractions(destinationId)]);
-    return { destination, items: rawItems.map(normalizeAttraction) };
+    const [destination, rawItems, locations, journeys] = await Promise.all([
+      getDestination(destinationId), listAttractions(destinationId), listLocations(destinationId), listJourneys(destinationId),
+    ]);
+    return { destination, locations, journeys, items: rawItems.map(normalizeAttraction) };
   }, [destinationId]);
   const { data, error, loading, refresh } = useCachedQuery(`attractions:${destinationId}`, fetcher);
 
@@ -53,22 +63,30 @@ export default function AttractionsPage() {
   if (error && !data) return <ErrorState description={error} onRetry={refresh} />;
   if (loading && !data) return <LoadingState label="Loading attractions…" />;
 
-  const { destination, items } = data;
+  const { destination, locations, journeys, items } = data;
   const currencies = getCurrencyOptions(destination);
+  const defaultCurrency = getDestinationDefaultCurrency(destination);
+  const contextLocation = locations.find(l => l.id === contextLocationId) || null;
+  // Items visible here: when scoped to a location, show that location's
+  // records only; otherwise show everything for the destination
+  // (whole-destination + every location + journey-linked records).
+  const visibleItems = contextLocationId ? items.filter(i => i.locationId === contextLocationId) : items;
 
   return (
-    <SectionPageLayout destination={destination} destinationId={destinationId} title="Attractions & Activities" onAdd={() => setEditing({})}>
-      {items.length === 0 ? (
+    <SectionPageLayout destination={destination} destinationId={destinationId} locationLabel={contextLocation?.name} title="Attractions & Activities" onAdd={() => setEditing({})}>
+      {visibleItems.length === 0 ? (
         <EmptyState icon="🏛️" title="No attractions yet" description="Add sights, landmarks, tours, or experiences you're researching." actionLabel="+ Add" onAction={() => setEditing({})} />
       ) : (
-        items.map(item => (
+        visibleItems.map(item => (
           <Card key={item.id} interactive padding="sm" accentColor="var(--color-teal)" className="entry-card" onClick={() => setEditing(item)}>
             <div className="entry-card__main">
               <div className="entry-card__title-line">
                 <PlaceSummary place={item.place} destinationName={destination.name} />
                 <PriorityBadge priority={item.priority} />
               </div>
-              {item.category && <p className="entry-card__meta">{item.category}</p>}
+              {!contextLocationId && locations.length > 0 && <p className="entry-card__meta">{describeLocationContext(item.locationId, locations)}</p>}
+              {item.journeyId && <p className="entry-card__meta">{describeJourney(journeys.find(j => j.id === item.journeyId), locations)}</p>}
+              {item.category && <p className="entry-card__meta">{item.category === 'Other' ? (item.categoryOther || 'Other') : item.category}</p>}
               {formatFeeBands(item.feeBands) && <p className="entry-card__meta">{formatFeeBands(item.feeBands)}</p>}
               {formatOpeningHours(item.openingHours) && <p className="entry-card__meta">{formatOpeningHours(item.openingHours)}</p>}
               {item.typicallySpent && <p className="entry-card__meta">Typically spent: {item.typicallySpent}</p>}
@@ -81,8 +99,13 @@ export default function AttractionsPage() {
       {editing !== null && (
         <AttractionForm
           destinationId={destinationId}
+          destinationName={destination.name}
           record={editing.id ? editing : null}
           currencies={currencies}
+          defaultCurrency={defaultCurrency}
+          locations={locations}
+          journeys={journeys}
+          contextLocationId={contextLocationId}
           onAddCurrency={handleAddCurrency}
           onClose={() => setEditing(null)}
           onSaved={() => { setEditing(null); afterMutation(); }}
@@ -92,10 +115,31 @@ export default function AttractionsPage() {
   );
 }
 
-function AttractionForm({ destinationId, record, currencies, onAddCurrency, onClose, onSaved }) {
+// Per item 8 of the spec: no separate "identify -> confirm -> full
+// form" staging, and no over-aggressive hiding of fields. The form
+// shows its important initial fields (place, location context,
+// category, notes) up front, Save is available immediately once a
+// name is entered, and the rest of the relevant fields are directly
+// visible on the same screen — nothing here requires saving and
+// reopening the record to reach normal fields. Fee bands/camera &
+// videography charges/opening hours are the one part still grouped
+// under a disclosure, since those are genuinely secondary for most
+// attractions (see Disclosure's defaultOpen logic below, which opens
+// automatically whenever the record being edited already has that
+// data — an already-detailed record is never shown collapsed).
+//
+// The Google Maps / place-identification step described in the spec
+// is intentionally NOT implemented yet — that design (OSM-based
+// suggestions + a Maps hand-off) is pending approval; the plain manual
+// link field below is unchanged from Phase 1 in the meantime.
+function AttractionForm({ destinationId, destinationName, record, currencies, defaultCurrency, locations, journeys, contextLocationId, onAddCurrency, onClose, onSaved }) {
   const base = record || emptyAttraction();
   const [place, setPlace] = useState(base.place || {});
+  const [locationId, setLocationId] = useState(base.locationId ?? contextLocationId ?? null);
+  const [journeyId, setJourneyId] = useState(base.journeyId || null);
+  const [localJourneys, setLocalJourneys] = useState(journeys);
   const [category, setCategory] = useState(base.category || '');
+  const [categoryOther, setCategoryOther] = useState(base.categoryOther || '');
   const [description, setDescription] = useState(base.description || '');
   const [feeBands, setFeeBands] = useState(base.feeBands || []);
   const [hasCameraCharge, setHasCameraCharge] = useState(Boolean(base.cameraCharge));
@@ -110,10 +154,6 @@ function AttractionForm({ destinationId, record, currencies, onAddCurrency, onCl
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  // Advanced fields are collapsed by default for a brand-new record
-  // (quick capture stays quick), but open by default whenever the
-  // record being edited already has any advanced data — an
-  // already-detailed record must never look artificially empty.
   const advancedHasContent = hasAdvancedContent(
     formatFeeBands(base.feeBands),
     !isMoneyEmpty(base.cameraCharge),
@@ -121,17 +161,20 @@ function AttractionForm({ destinationId, record, currencies, onAddCurrency, onCl
     formatOpeningHours(base.openingHours),
     base.typicallySpent,
     base.bestTimeOfDay?.option,
-    base.priority,
   );
+
+  async function refreshJourneys() {
+    setLocalJourneys(await listJourneys(destinationId));
+  }
 
   async function handleSubmit(e) {
     e.preventDefault();
-    if (!place.name) { setError('Place name is required.'); return; }
+    if (!place.name?.trim()) { setError('Enter a name.'); return; }
     setError('');
     setSubmitting(true);
     try {
       const fields = {
-        place, category, description,
+        place, locationId, journeyId, category, categoryOther: category === 'Other' ? categoryOther : '', description,
         feeBands, cameraCharge: hasCameraCharge ? cameraCharge : null, videographyCharge: hasVideographyCharge ? videographyCharge : null,
         openingHours, typicallySpent,
         bestTimeOfDay: { option: bestTimeOption, note: bestTimeNote },
@@ -150,45 +193,43 @@ function AttractionForm({ destinationId, record, currencies, onAddCurrency, onCl
   return (
     <Modal open onClose={onClose} title={record ? 'Edit Attraction' : 'New Attraction'}>
       <form onSubmit={handleSubmit}>
-        <PlaceField value={place} onChange={setPlace} />
-        <Select label="Category" value={category} onChange={e => setCategory(e.target.value)}>
-          <option value="">Choose a category…</option>
-          {ATTRACTION_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+        <PlaceField
+          value={place}
+          onChange={setPlace}
+          locationName={locations.find(l => l.id === locationId)?.name}
+          destinationName={destinationName}
+          expectedCategory={CATEGORY_HINTS.attraction}
+        />
+        <LocationScopeField locations={locations} value={locationId} onChange={setLocationId} lockedLocationId={record ? null : contextLocationId} />
+        <JourneyField journeys={localJourneys} locations={locations} destinationId={destinationId} value={journeyId} onChange={setJourneyId} onJourneyCreated={refreshJourneys} />
+        <OtherSelect label="Category" value={category} otherValue={categoryOther} onChange={setCategory} onOtherChange={setCategoryOther} options={ATTRACTION_CATEGORIES} />
+        <TextArea label="Notes" value={description} onChange={e => setDescription(e.target.value)} rows={3} placeholder="What's worth remembering about this place?" />
+        <Input label="Typically spent" value={typicallySpent} onChange={e => setTypicallySpent(e.target.value)} placeholder="e.g. 1-2 hours" hint="How long visitors normally spend here." />
+        <OtherSelect label="Best time of day" value={bestTimeOption} otherValue={bestTimeNote} onChange={setBestTimeOption} onOtherChange={setBestTimeNote} options={BEST_TIME_OF_DAY_OPTIONS} placeholder="Not specified" />
+        <Select label="Priority" value={priority} onChange={e => setPriority(e.target.value)}>
+          <option value="">No priority set</option>
+          <option value="must_know">Must Know</option>
+          <option value="useful">Useful</option>
+          <option value="optional">Optional</option>
+          <option value="reference">Reference</option>
         </Select>
-        <TextArea label="Notes" value={description} onChange={e => setDescription(e.target.value)} rows={3} placeholder="A quick note is enough to save this — add fees, hours, and other details below if you have them." />
 
-        <Disclosure label="Add more details" defaultOpen={advancedHasContent}>
-          <FeeBandsField bands={feeBands} onChange={setFeeBands} currencies={currencies} onAddCurrency={onAddCurrency} />
+        <Disclosure label="Fees & opening hours" defaultOpen={advancedHasContent}>
+          <FeeBandsField bands={feeBands} onChange={setFeeBands} currencies={currencies} defaultCurrency={defaultCurrency} onAddCurrency={onAddCurrency} />
 
           <label className="attraction-form__toggle">
             <input type="checkbox" checked={hasCameraCharge} onChange={e => setHasCameraCharge(e.target.checked)} />
             <span>Camera charge</span>
           </label>
-          {hasCameraCharge && <MoneyField label="" value={cameraCharge} onChange={setCameraCharge} currencies={currencies} onAddCurrency={onAddCurrency} />}
+          {hasCameraCharge && <MoneyField label="" value={cameraCharge} onChange={setCameraCharge} currencies={currencies} defaultCurrency={defaultCurrency} onAddCurrency={onAddCurrency} />}
 
           <label className="attraction-form__toggle">
             <input type="checkbox" checked={hasVideographyCharge} onChange={e => setHasVideographyCharge(e.target.checked)} />
             <span>Videography charge</span>
           </label>
-          {hasVideographyCharge && <MoneyField label="" value={videographyCharge} onChange={setVideographyCharge} currencies={currencies} onAddCurrency={onAddCurrency} />}
+          {hasVideographyCharge && <MoneyField label="" value={videographyCharge} onChange={setVideographyCharge} currencies={currencies} defaultCurrency={defaultCurrency} onAddCurrency={onAddCurrency} />}
 
           <OpeningHoursField value={openingHours} onChange={setOpeningHours} />
-
-          <Input label="Typically spent" value={typicallySpent} onChange={e => setTypicallySpent(e.target.value)} placeholder="e.g. 1-2 hours" hint="How long visitors normally spend here — not a fixed itinerary duration." />
-
-          <Select label="Best time of day" value={bestTimeOption} onChange={e => setBestTimeOption(e.target.value)}>
-            <option value="">Not specified</option>
-            {BEST_TIME_OF_DAY_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
-          </Select>
-          {bestTimeOption === 'Other' && <Input placeholder="Describe the best time" value={bestTimeNote} onChange={e => setBestTimeNote(e.target.value)} />}
-
-          <Select label="Priority" value={priority} onChange={e => setPriority(e.target.value)}>
-            <option value="">No priority set</option>
-            <option value="must_know">Must Know</option>
-            <option value="useful">Useful</option>
-            <option value="optional">Optional</option>
-            <option value="reference">Reference</option>
-          </Select>
         </Disclosure>
 
         {error && <p className="form-error" role="alert">{error}</p>}

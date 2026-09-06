@@ -5,7 +5,7 @@ import { useCachedQuery, invalidateCachedQuery } from '../hooks/useCachedQuery';
 import Card from '../components/Card';
 import Button from '../components/Button';
 import Modal from '../components/Modal';
-import { Input, TextArea } from '../components/Field';
+import { Input, TextArea, Select } from '../components/Field';
 import { EmptyState, LoadingState, ErrorState } from '../components/States';
 import './ResearchHome.css';
 
@@ -91,16 +91,22 @@ function Header({ onNew }) {
 function CreateDestinationModal({ open, onClose, onCreated }) {
   const [name, setName] = useState('');
   const [overview, setOverview] = useState('');
+  const [defaultCurrency, setDefaultCurrency] = useState('INR');
+  const [customCurrency, setCustomCurrency] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  const isCustom = defaultCurrency === '__OTHER__';
 
   async function handleSubmit(e) {
     e.preventDefault();
     setError('');
+    const resolvedCurrency = isCustom ? customCurrency.trim().toUpperCase() : defaultCurrency;
+    if (isCustom && !resolvedCurrency) { setError('Enter a currency code, e.g. KGS.'); return; }
     setSubmitting(true);
     try {
-      const dest = await createDestination({ name, overview });
-      setName(''); setOverview('');
+      const dest = await createDestination({ name, overview, defaultCurrency: resolvedCurrency });
+      setName(''); setOverview(''); setDefaultCurrency('INR'); setCustomCurrency('');
       onCreated(dest);
     } catch (err) {
       setError(err.message);
@@ -114,6 +120,12 @@ function CreateDestinationModal({ open, onClose, onCreated }) {
       <form onSubmit={handleSubmit}>
         <Input label="Name" required autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Sri Lanka" />
         <TextArea label="Overview" value={overview} onChange={e => setOverview(e.target.value)} placeholder="A short overview (optional)" rows={3} />
+        <Select label="Default currency" hint="INR and USD are always available regardless of what you pick here. You can change this or add more currencies later from Currency settings." value={defaultCurrency} onChange={e => setDefaultCurrency(e.target.value)}>
+          <option value="INR">INR</option>
+          <option value="USD">USD</option>
+          <option value="__OTHER__">Other…</option>
+        </Select>
+        {isCustom && <Input label="Currency code" placeholder="e.g. KGS" value={customCurrency} onChange={e => setCustomCurrency(e.target.value)} />}
         {error && <p className="form-error" role="alert">{error}</p>}
         <Button type="submit" fullWidth disabled={submitting}>{submitting ? 'Creating…' : 'Create Destination'}</Button>
       </form>

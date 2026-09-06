@@ -4,9 +4,9 @@ import ResearchHome from './pages/ResearchHome';
 import DestinationDetail from './pages/DestinationDetail';
 import AttractionsPage from './pages/sections/AttractionsPage';
 import RestaurantsPage from './pages/sections/RestaurantsPage';
+import DishesPage from './pages/sections/DishesPage';
 import AccommodationsPage from './pages/sections/AccommodationsPage';
 import TransportPage from './pages/sections/TransportPage';
-import CostsPage from './pages/sections/CostsPage';
 import PracticalInfoPage from './pages/sections/PracticalInfoPage';
 import WeatherPage from './pages/sections/WeatherPage';
 import PackingPage from './pages/sections/PackingPage';
@@ -31,9 +31,9 @@ export default function App() {
           <Route path="/destinations/:destinationId" element={<DestinationDetail />} />
           <Route path="/destinations/:destinationId/attractions" element={<AttractionsPage />} />
           <Route path="/destinations/:destinationId/restaurants" element={<RestaurantsPage />} />
+          <Route path="/destinations/:destinationId/dishes" element={<DishesPage />} />
           <Route path="/destinations/:destinationId/accommodations" element={<AccommodationsPage />} />
           <Route path="/destinations/:destinationId/transport" element={<TransportPage />} />
-          <Route path="/destinations/:destinationId/costs" element={<CostsPage />} />
           <Route path="/destinations/:destinationId/practical-info" element={<PracticalInfoPage />} />
           <Route path="/destinations/:destinationId/weather" element={<WeatherPage />} />
           <Route path="/destinations/:destinationId/packing" element={<PackingPage />} />

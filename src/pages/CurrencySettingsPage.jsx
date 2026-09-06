@@ -1,11 +1,11 @@
 import { useState, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { getDestination } from '../db/stores/destinations';
-import { getCurrencyOptions, addDestinationCurrency, listExchangeRates, setExchangeRate, convertAmount } from '../db/currency.js';
+import { getCurrencyOptions, getDestinationDefaultCurrency, setDestinationDefaultCurrency, addDestinationCurrency, listExchangeRates, setExchangeRate, convertAmount } from '../db/currency.js';
 import { useCachedQuery, invalidateCachedQuery } from '../hooks/useCachedQuery';
 import Card from '../components/Card';
 import Button from '../components/Button';
-import { Input } from '../components/Field';
+import { Input, Select } from '../components/Field';
 import { LoadingState, ErrorState } from '../components/States';
 import '../components/SectionPageLayout.css';
 
@@ -26,6 +26,14 @@ export default function CurrencySettingsPage() {
 
   const { destination, rates } = data;
   const currencies = getCurrencyOptions(destination);
+  const defaultCurrency = getDestinationDefaultCurrency(destination);
+
+  async function handleChangeDefault(code) {
+    await setDestinationDefaultCurrency(destinationId, code);
+    invalidateCachedQuery(`currencySettings:${destinationId}`);
+    invalidateCachedQuery(`destination:${destinationId}`);
+    refresh();
+  }
 
   async function handleAddCurrency(e) {
     e.preventDefault();
@@ -52,7 +60,7 @@ export default function CurrencySettingsPage() {
   return (
     <div className="section-page">
       <div className="section-page__breadcrumb">
-        <Link to="/">Research</Link>
+        <Link to="/">Home</Link>
         <span aria-hidden="true">/</span>
         <Link to={`/destinations/${destinationId}`}>{destination?.name}</Link>
         <span aria-hidden="true">/</span>
@@ -64,10 +72,19 @@ export default function CurrencySettingsPage() {
 
       <Card className="entry-card" style={{ display: 'block', marginBottom: 'var(--space-5)' }}>
         <p className="entry-card__meta" style={{ marginBottom: 'var(--space-3)' }}>
+          New monetary fields for {destination.name} default to this currency. Changing it never rewrites amounts you've already saved — each of those keeps its own original currency permanently.
+        </p>
+        <Select label="Default currency" value={defaultCurrency} onChange={e => handleChangeDefault(e.target.value)}>
+          {currencies.map(c => <option key={c} value={c}>{c}</option>)}
+        </Select>
+      </Card>
+
+      <Card className="entry-card" style={{ display: 'block', marginBottom: 'var(--space-5)' }}>
+        <p className="entry-card__meta" style={{ marginBottom: 'var(--space-3)' }}>
           Currencies available for this destination. INR and USD are always available. Original research amounts never change — exchange rates are only used for an approximate display conversion.
         </p>
         <div className="currency-page__chips">
-          {currencies.map(c => <span key={c} className="badge badge--section">{c}</span>)}
+          {currencies.map(c => <span key={c} className="badge badge--section">{c}{c === defaultCurrency ? ' (default)' : ''}</span>)}
         </div>
         <form onSubmit={handleAddCurrency} className="currency-page__add-form">
           <Input placeholder="Add currency code, e.g. THB" value={newCurrency} onChange={e => setNewCurrency(e.target.value)} />

@@ -46,7 +46,7 @@ export default function PackingPage() {
   return (
     <div className="section-page packing-page">
       <div className="section-page__breadcrumb">
-        <Link to="/">Research</Link>
+        <Link to="/">Home</Link>
         <span aria-hidden="true">/</span>
         <Link to={`/destinations/${destinationId}`}>{destination?.name}</Link>
         <span aria-hidden="true">/</span>

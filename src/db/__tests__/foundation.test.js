@@ -9,7 +9,7 @@ import 'fake-indexeddb/auto';
 import assert from 'node:assert/strict';
 import { __resetDbForTest } from '../connection.js';
 import { createDestination, deleteDestination, getDestination } from '../stores/destinations.js';
-import { createAttraction, listAttractions, updateAttraction, deleteAttraction } from '../stores/attractions.js';
+import { createAttraction, listAttractions, updateAttraction, deleteAttraction, getAttraction } from '../stores/attractions.js';
 import { createRestaurantEntry, isPlaceBased } from '../stores/restaurants.js';
 import { createTransportEntry, listTransportEntries } from '../stores/transport.js';
 import { createCostEntry, getCostEntry } from '../stores/costs.js';
@@ -17,7 +17,7 @@ import { createIntake, getIntake, updateCandidate, acceptCandidate, rejectCandid
 import { extractCandidates, extractPriceFromText } from '../extraction.js';
 import { buildGoogleMapsUrl } from '../../lib/googleMaps.js';
 import { reconstructLines, stripRepeatedPageBoilerplate } from '../../lib/pdfText.js';
-import { createAccommodation } from '../stores/accommodations.js';
+import { createAccommodation, getAccommodation } from '../stores/accommodations.js';
 import { createWeatherNote, normalizeWeatherNote } from '../stores/weatherNotes.js';
 import { emptyFeeBand, formatFeeBands } from '../../lib/feeBands.js';
 import { formatOpeningHours } from '../../lib/openingHours.js';
@@ -25,6 +25,10 @@ import { CORE_CURRENCIES, getCurrencyOptions, addDestinationCurrency, setExchang
 import { createShoppingItem } from '../stores/shoppingItems.js';
 import { createLocation, listLocations, updateLocation, deleteLocation, getLocation } from '../stores/locations.js';
 import { createPracticalInfoEntry, listPracticalInfoEntries } from '../stores/practicalInfo.js';
+import { createJourney, listJourneys, updateJourney, deleteJourney, getJourney, listJourneysUsingLocation, retireJourneysUsingLocation, describeJourney } from '../stores/journeys.js';
+import { createDish, listDishes, updateDish, deleteDish, getDish, linkDishToRestaurant, unlinkDishFromRestaurant, listDishesForRestaurant } from '../stores/dishes.js';
+import { normalizeTransportEntry } from '../stores/transport.js';
+import { getDestinationDefaultCurrency, setDestinationDefaultCurrency } from '../currency.js';
 
 let passed = 0, failed = 0;
 async function test(name, fn) {
@@ -876,6 +880,529 @@ await test('opening a v2 database with v3 code adds the locations store without 
   assert.ok(location.id);
   const locations = await listLocations('existing-dest-2');
   assert.equal(locations.length, 1);
+});
+
+console.log('\n17. Journeys — travel between two existing cities/locations (Option C: a proper entity, not a synthetic locationId)');
+await test('a journey can be created between two different locations', async () => {
+  const dest = await createDestination({ name: 'Thailand' });
+  const bangkok = await createLocation(dest.id, { name: 'Bangkok' });
+  const phuket = await createLocation(dest.id, { name: 'Phuket' });
+  const journey = await createJourney(dest.id, { fromLocationId: bangkok.id, toLocationId: phuket.id });
+  assert.equal(journey.fromLocationId, bangkok.id);
+  assert.equal(journey.toLocationId, phuket.id);
+  assert.equal(journey.destinationId, dest.id);
+});
+
+await test('a journey with the same city as origin and destination is rejected', async () => {
+  const dest = await createDestination({ name: 'Thailand' });
+  const bangkok = await createLocation(dest.id, { name: 'Bangkok' });
+  await assert.rejects(() => createJourney(dest.id, { fromLocationId: bangkok.id, toLocationId: bangkok.id }));
+});
+
+await test('a journey missing either endpoint is rejected', async () => {
+  const dest = await createDestination({ name: 'Thailand' });
+  const bangkok = await createLocation(dest.id, { name: 'Bangkok' });
+  await assert.rejects(() => createJourney(dest.id, { fromLocationId: bangkok.id, toLocationId: null }));
+  await assert.rejects(() => createJourney(dest.id, {}));
+});
+
+await test('journeys can be listed for a destination', async () => {
+  const dest = await createDestination({ name: 'Thailand' });
+  const bangkok = await createLocation(dest.id, { name: 'Bangkok' });
+  const phuket = await createLocation(dest.id, { name: 'Phuket' });
+  const chiangMai = await createLocation(dest.id, { name: 'Chiang Mai' });
+  await createJourney(dest.id, { fromLocationId: bangkok.id, toLocationId: phuket.id });
+  await createJourney(dest.id, { fromLocationId: bangkok.id, toLocationId: chiangMai.id });
+  const journeys = await listJourneys(dest.id);
+  assert.equal(journeys.length, 2);
+});
+
+await test('renaming a location leaves the journey valid and resolves to the new name', async () => {
+  const dest = await createDestination({ name: 'Thailand' });
+  const bangkok = await createLocation(dest.id, { name: 'Bangkok' });
+  const phuket = await createLocation(dest.id, { name: 'Phuket' });
+  const journey = await createJourney(dest.id, { fromLocationId: bangkok.id, toLocationId: phuket.id });
+
+  await updateLocation(phuket.id, { name: 'Phuket Island' });
+  const stillValid = await getJourney(journey.id);
+  assert.equal(stillValid.toLocationId, phuket.id, 'journey keeps referencing the location by id, unaffected by rename');
+
+  const freshLocations = await listLocations(dest.id);
+  assert.equal(describeJourney(stillValid, freshLocations), 'Bangkok → Phuket Island', 'display resolves the CURRENT name at read time');
+});
+
+await test('deleting a location explicitly retires journeys that used it, rather than leaving them silently broken', async () => {
+  const dest = await createDestination({ name: 'Thailand' });
+  const bangkok = await createLocation(dest.id, { name: 'Bangkok' });
+  const phuket = await createLocation(dest.id, { name: 'Phuket' });
+  const chiangMai = await createLocation(dest.id, { name: 'Chiang Mai' });
+  const affectedJourney = await createJourney(dest.id, { fromLocationId: bangkok.id, toLocationId: phuket.id });
+  const unaffectedJourney = await createJourney(dest.id, { fromLocationId: bangkok.id, toLocationId: chiangMai.id });
+
+  const using = await listJourneysUsingLocation(dest.id, phuket.id);
+  assert.equal(using.length, 1);
+  assert.equal(using[0].id, affectedJourney.id);
+
+  const retired = await retireJourneysUsingLocation(dest.id, phuket.id);
+  assert.equal(retired.length, 1);
+  await deleteLocation(phuket.id);
+
+  assert.equal(await getJourney(affectedJourney.id), null, 'the journey using the deleted location is soft-deleted, not left dangling');
+  assert.ok(await getJourney(unaffectedJourney.id), 'a journey NOT using the deleted location is untouched');
+
+  const remainingJourneys = await listJourneys(dest.id);
+  assert.equal(remainingJourneys.length, 1);
+});
+
+await test('a record can be associated with a journey via its own optional journeyId field, never via locationId', async () => {
+  const dest = await createDestination({ name: 'Thailand' });
+  const bangkok = await createLocation(dest.id, { name: 'Bangkok' });
+  const phuket = await createLocation(dest.id, { name: 'Phuket' });
+  const journey = await createJourney(dest.id, { fromLocationId: bangkok.id, toLocationId: phuket.id });
+
+  const attraction = await createAttraction(dest.id, { place: { name: 'Roadside viewpoint' }, journeyId: journey.id });
+  assert.equal(attraction.journeyId, journey.id, 'journey association lives in journeyId');
+  assert.equal(attraction.locationId, null, 'locationId is untouched by journey association — it never holds a synthetic id');
+
+  const transportEntry = await createTransportEntry(dest.id, { travelType: 'inter_city', from: { label: 'Bangkok' }, to: { label: 'Phuket' }, journeyId: journey.id });
+  assert.equal(transportEntry.journeyId, journey.id);
+});
+
+await test('an attraction with a real locationId never gets confused with a journey reference', async () => {
+  const dest = await createDestination({ name: 'Thailand' });
+  const bangkok = await createLocation(dest.id, { name: 'Bangkok' });
+  const attraction = await createAttraction(dest.id, { place: { name: 'Grand Palace' }, locationId: bangkok.id });
+  assert.equal(attraction.locationId, bangkok.id, 'locationId is a real location id');
+  assert.equal(attraction.journeyId, null, 'journeyId defaults to null and is a completely separate field');
+});
+
+await test('an attraction saved before journeyId existed is fully backward compatible', async () => {
+  const dest = await createDestination({ name: 'Thailand' });
+  const attraction = await createAttraction(dest.id, { place: { name: 'Old Attraction' } });
+  // Simulate a genuinely old record: strip journeyId as if it had been
+  // saved before this field was introduced.
+  delete attraction.journeyId;
+  const list = await listAttractions(dest.id);
+  assert.equal(list.length, 1, 'an attraction with no journeyId key at all is still listed normally');
+});
+
+await test('a journey can be updated (e.g. adding notes) and directly soft-deleted', async () => {
+  const dest = await createDestination({ name: 'Thailand' });
+  const bangkok = await createLocation(dest.id, { name: 'Bangkok' });
+  const phuket = await createLocation(dest.id, { name: 'Phuket' });
+  const journey = await createJourney(dest.id, { fromLocationId: bangkok.id, toLocationId: phuket.id });
+
+  const updated = await updateJourney(journey.id, { notes: 'Overnight bus is cheapest' });
+  assert.equal(updated.notes, 'Overnight bus is cheapest');
+
+  await deleteJourney(journey.id);
+  assert.equal(await getJourney(journey.id), null);
+  const remaining = await listJourneys(dest.id);
+  assert.equal(remaining.length, 0);
+});
+
+await test('updating a journey to have the same from/to location is rejected', async () => {
+  const dest = await createDestination({ name: 'Thailand' });
+  const bangkok = await createLocation(dest.id, { name: 'Bangkok' });
+  const phuket = await createLocation(dest.id, { name: 'Phuket' });
+  const journey = await createJourney(dest.id, { fromLocationId: bangkok.id, toLocationId: phuket.id });
+  await assert.rejects(() => updateJourney(journey.id, { toLocationId: bangkok.id }));
+});
+
+console.log('\n18. Dishes — independent food items with a many-to-many Restaurant relationship');
+await test('a dish can be created independently, with no restaurant attached', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const dish = await createDish(dest.id, { name: 'Momos' });
+  assert.equal(dish.name, 'Momos');
+  assert.deepEqual(dish.restaurantIds, []);
+});
+
+await test('creating a dish without a name is rejected', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  await assert.rejects(() => createDish(dest.id, { name: '' }));
+});
+
+await test('a restaurant can have multiple linked dishes, and a dish can have multiple linked restaurants (many-to-many)', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const kunga = await createRestaurantEntry(dest.id, { place: { name: 'Kunga Restaurant' } });
+  const shangriLa = await createRestaurantEntry(dest.id, { place: { name: 'Shangri La' } });
+
+  const momo = await createDish(dest.id, { name: 'Momo' });
+  const friedRice = await createDish(dest.id, { name: 'Fried Rice' });
+  const chilliChicken = await createDish(dest.id, { name: 'Chilli Chicken' });
+  const munchowSoup = await createDish(dest.id, { name: 'Munchow Soup' });
+
+  // Kunga -> Momo, Fried Rice, Chilli Chicken, Munchow Soup
+  await linkDishToRestaurant(momo.id, kunga.id);
+  await linkDishToRestaurant(friedRice.id, kunga.id);
+  await linkDishToRestaurant(chilliChicken.id, kunga.id);
+  await linkDishToRestaurant(munchowSoup.id, kunga.id);
+  // Munchow Soup -> also Shangri La
+  await linkDishToRestaurant(munchowSoup.id, shangriLa.id);
+
+  const kungaDishes = await listDishesForRestaurant(dest.id, kunga.id);
+  assert.deepEqual(kungaDishes.map(d => d.name).sort(), ['Chilli Chicken', 'Fried Rice', 'Momo', 'Munchow Soup'], 'opening Kunga shows all four linked dishes');
+
+  const munchowSoupAfter = await getDish(munchowSoup.id);
+  assert.deepEqual(munchowSoupAfter.restaurantIds.sort(), [kunga.id, shangriLa.id].sort(), 'opening Munchow Soup shows both linked restaurants');
+
+  const shangriLaDishes = await listDishesForRestaurant(dest.id, shangriLa.id);
+  assert.equal(shangriLaDishes.length, 1);
+  assert.equal(shangriLaDishes[0].id, munchowSoup.id);
+});
+
+await test('linking the same dish to the same restaurant twice does not create a duplicate', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const kunga = await createRestaurantEntry(dest.id, { place: { name: 'Kunga Restaurant' } });
+  const momo = await createDish(dest.id, { name: 'Momo' });
+  await linkDishToRestaurant(momo.id, kunga.id);
+  await linkDishToRestaurant(momo.id, kunga.id);
+  const after = await getDish(momo.id);
+  assert.equal(after.restaurantIds.length, 1, 'linking twice is idempotent, not duplicated');
+});
+
+await test('unlinking a dish from a restaurant removes just that association', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const kunga = await createRestaurantEntry(dest.id, { place: { name: 'Kunga Restaurant' } });
+  const shangriLa = await createRestaurantEntry(dest.id, { place: { name: 'Shangri La' } });
+  const munchowSoup = await createDish(dest.id, { name: 'Munchow Soup' });
+  await linkDishToRestaurant(munchowSoup.id, kunga.id);
+  await linkDishToRestaurant(munchowSoup.id, shangriLa.id);
+
+  await unlinkDishFromRestaurant(munchowSoup.id, kunga.id);
+  const after = await getDish(munchowSoup.id);
+  assert.deepEqual(after.restaurantIds, [shangriLa.id]);
+});
+
+await test('a dish can be updated and soft-deleted', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const dish = await createDish(dest.id, { name: 'Momo' });
+  const updated = await updateDish(dish.id, { cuisine: 'Tibetan' });
+  assert.equal(updated.cuisine, 'Tibetan');
+  await deleteDish(dish.id);
+  const list = await listDishes(dest.id);
+  assert.equal(list.length, 0);
+});
+
+await test('legacy restaurant records (place: null, dishName set) remain fully readable and unaffected by the Dishes split', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  // Simulate an entry saved under the OLD dual-mode restaurants.js
+  // shape, before Dishes existed as its own entity.
+  const legacyDishNote = await createRestaurantEntry(dest.id, { place: null, dishName: 'Thukpa (no restaurant known yet)' });
+  assert.equal(isPlaceBased(legacyDishNote), false, 'a legacy dish-only record is still recognized as such');
+  assert.equal(legacyDishNote.dishName, 'Thukpa (no restaurant known yet)');
+  assert.equal(legacyDishNote.place, null, 'the reverted place:null default is confirmed in effect for new restaurant records with no place given');
+});
+
+await test('a brand-new restaurant record defaults to place: null (the approved, reverted default) when no place is given', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const entry = await createRestaurantEntry(dest.id, { dishName: 'General food note' });
+  assert.equal(entry.place, null, 'emptyRestaurantEntry() defaults place to null, not emptyPlace() — the unapproved change was reverted');
+});
+
+console.log('\n18b. Import pipeline: Costs cannot be produced; Dishes can complete the full path');
+await test('extracting candidates from realistic cost-flavoured text never proposes the costs section (Costs is not in SECTION_KEYWORDS)', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const { candidates } = await createIntake({
+    destinationId: dest.id,
+    rawText: 'Costs & Money\n- SIM card: LKR 1500\n- Local bus fare: LKR 50\n- Hotel deposit: USD 20',
+  });
+  for (const c of candidates) {
+    assert.notEqual(c.proposedSection, 'costs', `a candidate must never be auto-classified as costs (got: ${JSON.stringify(c)})`);
+  }
+});
+
+await test('even if a caller tried to force section: "costs", acceptCandidate refuses because costs is not in CREATORS', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const { candidates } = await createIntake({ destinationId: dest.id, rawText: 'Practical Info\n- Visa: on arrival, USD 50' });
+  const candidate = candidates[0];
+  await assert.rejects(
+    () => acceptCandidate(candidate.id, { section: 'costs', sectionFields: { item: 'Visa', price: { amount: 50, currency: 'USD' } } }),
+    /Choose a valid section/,
+    'acceptCandidate must reject "costs" as a section even if something tried to pass it directly, not just rely on the UI never offering it',
+  );
+});
+
+await test('a Dishes candidate can travel the full import -> review -> accept path and produces a real Dish record', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const { candidates } = await createIntake({ destinationId: dest.id, rawText: 'Restaurants & Food\n- Momos are a local specialty' });
+  const candidate = candidates[0];
+  assert.ok(candidate, 'extraction produced at least one candidate to reassign');
+
+  // Simulate what ReviewPage.jsx does: the person reassigns this
+  // candidate's section to Dishes and edits the fields via the
+  // case 'dishes' editor (name + notes, per REST_FIELD_BY_SECTION).
+  await updateCandidate(candidate.id, { proposedSection: 'dishes' });
+  const record = await acceptCandidate(candidate.id, {
+    section: 'dishes',
+    sectionFields: { name: 'Momos', notes: 'A local specialty' },
+  });
+
+  assert.ok(record.id, 'acceptCandidate successfully created a real Dish record');
+  assert.equal(record.name, 'Momos');
+  assert.equal(record.provenance, 'imported');
+  assert.equal(record.candidateId, candidate.id, 'the created dish links back to the candidate it came from');
+
+  const dishes = await listDishes(dest.id);
+  assert.equal(dishes.length, 1);
+  assert.equal(dishes[0].id, record.id);
+});
+
+console.log('\n19. Currency — destination default currency (INR fallback, explicit choice, changing later)');
+await test('a destination created with no explicit currency defaults to INR', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  assert.equal(getDestinationDefaultCurrency(dest), 'INR');
+});
+
+await test('a destination can be created with an explicit default currency, e.g. KGS for Kyrgyzstan', async () => {
+  const dest = await createDestination({ name: 'Kyrgyzstan', defaultCurrency: 'KGS' });
+  assert.equal(dest.defaultCurrency, 'KGS');
+  assert.equal(getDestinationDefaultCurrency(dest), 'KGS');
+});
+
+await test('setDestinationDefaultCurrency changes the default and makes it available as an option', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  await setDestinationDefaultCurrency(dest.id, 'USD');
+  const after = await getDestination(dest.id);
+  assert.equal(getDestinationDefaultCurrency(after), 'USD');
+  assert.ok(getCurrencyOptions(after).includes('USD'));
+});
+
+await test('changing the destination default currency never rewrites an existing research record\'s stored amount/currency', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' }); // starts as INR
+  const hotel = await createAccommodation(dest.id, { place: { name: 'Hotel' }, price: { amount: 8000, currency: 'INR', unit: 'per night', note: '' } });
+  const attraction = await createAttraction(dest.id, {
+    place: { name: 'Temple' },
+    feeBands: [{ id: crypto.randomUUID(), label: '', minAge: '', maxAge: '', status: 'paid', amount: 3000, currency: 'LKR' }],
+  });
+
+  await setDestinationDefaultCurrency(dest.id, 'USD');
+
+  const hotelAfter = await getAccommodation(hotel.id);
+  assert.equal(hotelAfter.price.amount, 8000);
+  assert.equal(hotelAfter.price.currency, 'INR', 'the existing hotel price keeps its original INR currency after the destination default changes to USD');
+
+  const attractionAfter = await getAttraction(attraction.id);
+  assert.equal(attractionAfter.feeBands[0].amount, 3000);
+  assert.equal(attractionAfter.feeBands[0].currency, 'LKR', 'the existing attraction fee keeps its original LKR currency after the destination default changes');
+});
+
+await test('INR and USD remain available as currency options regardless of the destination default', async () => {
+  const dest = await createDestination({ name: 'Kyrgyzstan', defaultCurrency: 'KGS' });
+  const options = getCurrencyOptions(dest);
+  assert.ok(options.includes('INR'));
+  assert.ok(options.includes('USD'));
+  assert.ok(options.includes('KGS'));
+});
+
+await test('a destination created before defaultCurrency existed is treated as INR without any migration', async () => {
+  // Simulate a genuinely old destination record: no defaultCurrency key.
+  const oldStyleDestination = { id: 'old-dest', name: 'Old Destination', currencies: [] };
+  assert.equal(getDestinationDefaultCurrency(oldStyleDestination), 'INR');
+});
+
+await test('the USD-base exchange-rate model supports multiple currencies pegged to USD, edited independently, never touching stored research values', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  await setExchangeRate('USD', 'INR', 83);
+  await setExchangeRate('USD', 'LKR', 300);
+  await setExchangeRate('USD', 'KGS', 89);
+
+  assert.equal(await getExchangeRate('USD', 'INR'), 83);
+  assert.equal(await getExchangeRate('USD', 'LKR'), 300);
+  assert.equal(await getExchangeRate('USD', 'KGS'), 89);
+
+  // Editing one rate later doesn't disturb the others or any stored record.
+  await setExchangeRate('USD', 'INR', 84);
+  assert.equal(await getExchangeRate('USD', 'INR'), 84);
+  assert.equal(await getExchangeRate('USD', 'LKR'), 300, 'updating the USD/INR rate does not affect the independently-set USD/LKR rate');
+
+  const attraction = await createAttraction(dest.id, {
+    place: { name: 'Temple' },
+    feeBands: [{ id: crypto.randomUUID(), label: '', minAge: '', maxAge: '', status: 'paid', amount: 3000, currency: 'LKR' }],
+  });
+  const reloaded = await getAttraction(attraction.id);
+  assert.equal(reloaded.feeBands[0].amount, 3000, 'the stored fee amount is untouched by any exchange-rate edits');
+  assert.equal(reloaded.feeBands[0].currency, 'LKR');
+});
+
+console.log('\n20. Transport — local vs. inter-city travel');
+await test('local transport can be created without any From/To, associated with a location instead', async () => {
+  const dest = await createDestination({ name: 'Thailand' });
+  const phuket = await createLocation(dest.id, { name: 'Phuket' });
+  const local = await createTransportEntry(dest.id, { travelType: 'local', locationId: phuket.id, mode: 'Tuk-tuk', bookingNotes: 'Flag down on the street' });
+  assert.equal(local.travelType, 'local');
+  assert.equal(local.locationId, phuket.id);
+  assert.equal(local.from.label, '', 'local transport has no meaningful From label');
+  assert.equal(local.to.label, '', 'local transport has no meaningful To label');
+});
+
+await test('local transport can also be destination-wide (no specific location)', async () => {
+  const dest = await createDestination({ name: 'Thailand' });
+  const local = await createTransportEntry(dest.id, { travelType: 'local', mode: 'Grab app' });
+  assert.equal(local.travelType, 'local');
+  assert.equal(local.locationId, null);
+});
+
+await test('inter-city transport still requires both From and To', async () => {
+  const dest = await createDestination({ name: 'Thailand' });
+  assert.throws(() => createTransportEntry(dest.id, { travelType: 'inter_city', from: { label: 'Bangkok' }, to: { label: '' } }));
+  const valid = await createTransportEntry(dest.id, { travelType: 'inter_city', from: { label: 'Bangkok' }, to: { label: 'Phuket' } });
+  assert.equal(valid.from.label, 'Bangkok');
+  assert.equal(valid.to.label, 'Phuket');
+});
+
+await test('a transport record saved before travelType existed is treated as inter_city and remains fully compatible', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const old = await createTransportEntry(dest.id, { from: { label: 'Colombo' }, to: { label: 'Kandy' } });
+  delete old.travelType; // simulate a genuinely pre-existing record with no travelType key
+  const normalized = normalizeTransportEntry(old);
+  assert.equal(normalized.travelType, 'inter_city');
+  assert.equal(normalized.from.label, 'Colombo');
+});
+
+await test('a new transport price defaults to the destination\'s currency default; an existing price keeps its own currency', async () => {
+  const dest = await createDestination({ name: 'Kyrgyzstan', defaultCurrency: 'KGS' });
+  assert.equal(getDestinationDefaultCurrency(dest), 'KGS');
+  const entry = await createTransportEntry(dest.id, { from: { label: 'Bishkek' }, to: { label: 'Osh' }, price: { amount: 1200, currency: 'INR', unit: 'per person', note: '' } });
+  assert.equal(entry.price.currency, 'INR', 'a price explicitly entered with its own currency is stored exactly as given, regardless of the destination default');
+});
+
+console.log('\n20b. "Other" fields — a chosen "Other" value is preserved with its own explanation, across every control that actually offers Other');
+await test('an accommodation type of "Other" preserves its free-text explanation separately', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const acc = await createAccommodation(dest.id, { place: { name: 'A treehouse' }, accommodationType: 'Other', accommodationTypeOther: 'Treehouse stay' });
+  assert.equal(acc.accommodationType, 'Other');
+  assert.equal(acc.accommodationTypeOther, 'Treehouse stay');
+});
+
+await test('a transport mode of "Other" preserves its free-text explanation separately', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const entry = await createTransportEntry(dest.id, { from: { label: 'Colombo' }, to: { label: 'Galle' }, mode: 'Other', modeOther: 'Chartered boat' });
+  assert.equal(entry.mode, 'Other');
+  assert.equal(entry.modeOther, 'Chartered boat');
+});
+
+await test('a practical-info topic of "Other" preserves its free-text explanation separately', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const entry = await createPracticalInfoEntry(dest.id, { topic: 'Other', topicOther: 'Tuk-tuk haggling norms', details: 'Always agree a price before getting in.' });
+  assert.equal(entry.topic, 'Other');
+  assert.equal(entry.topicOther, 'Tuk-tuk haggling norms');
+});
+
+await test('legacy accommodation/transport/practicalInfo records with an "Other" value but no *Other explanation field remain readable', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  // Simulate records saved before the *Other fields existed.
+  const acc = await createAccommodation(dest.id, { place: { name: 'Old Place' }, accommodationType: 'Other' });
+  delete acc.accommodationTypeOther;
+  assert.equal(acc.accommodationType, 'Other', 'reading an old record with no accommodationTypeOther key at all does not throw or corrupt the record');
+});
+
+await test('accommodation supports locationId scoping the same way attractions/transport/dishes do (consistency fix)', async () => {
+  const dest = await createDestination({ name: 'Thailand' });
+  const bangkok = await createLocation(dest.id, { name: 'Bangkok' });
+  const hotel = await createAccommodation(dest.id, { place: { name: 'Riverside Hotel' }, locationId: bangkok.id });
+  assert.equal(hotel.locationId, bangkok.id);
+  const wholeDestHotel = await createAccommodation(dest.id, { place: { name: 'Chain option, TBD city' } });
+  assert.equal(wholeDestHotel.locationId, null);
+});
+
+console.log('\n21. Database version upgrade to v5 (journeys + dishes) preserves data through the full chain');
+await test('upgrading a v4 database (dishes exists, journeys does not) to v5 adds journeys without touching existing data', async () => {
+  const v4StoreNames = [
+    'destinations', 'locations', 'sources', 'attractions', 'restaurants', 'dishes', 'accommodations', 'transport',
+    'costs', 'practicalInfo', 'weatherNotes', 'packingNotes', 'generalNotes',
+    'shoppingItems', 'shops', 'exchangeRates', 'intakeDocuments', 'candidates',
+  ];
+  const v4Db = await new Promise((resolve, reject) => {
+    const req = globalThis.indexedDB.open('dossier', 4);
+    req.onupgradeneeded = (event) => {
+      const db = event.target.result;
+      for (const name of v4StoreNames) {
+        const store = db.createObjectStore(name, { keyPath: 'id' });
+        if (!['destinations', 'exchangeRates'].includes(name)) store.createIndex('destinationId', 'destinationId');
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  await new Promise((resolve, reject) => {
+    const tx = v4Db.transaction(['destinations', 'locations', 'restaurants', 'dishes'], 'readwrite');
+    tx.objectStore('destinations').put({ id: 'v4-dest', name: 'Pre-Journeys Destination', currencies: [] }); // no defaultCurrency key either
+    tx.objectStore('locations').put({ id: 'v4-loc-1', destinationId: 'v4-dest', name: 'Old City', deletedAt: null });
+    tx.objectStore('restaurants').put({ id: 'v4-restaurant-1', destinationId: 'v4-dest', place: { name: 'Old Restaurant' }, deletedAt: null });
+    tx.objectStore('dishes').put({ id: 'v4-dish-1', destinationId: 'v4-dest', name: 'Old Dish', restaurantIds: ['v4-restaurant-1'], deletedAt: null });
+    tx.oncomplete = resolve;
+    tx.onerror = reject;
+  });
+  v4Db.close();
+
+  __resetDbForTest();
+  const destination = await getDestination('v4-dest');
+  assert.ok(destination, 'pre-existing v4 destination survives the v4->v5 upgrade');
+  assert.equal(getDestinationDefaultCurrency(destination), 'INR', 'a destination with no defaultCurrency key defaults to INR after upgrade');
+
+  const locations = await listLocations('v4-dest');
+  assert.equal(locations.length, 1);
+  assert.equal(locations[0].name, 'Old City');
+
+  const dishes = await listDishes('v4-dest');
+  assert.equal(dishes.length, 1);
+  assert.equal(dishes[0].name, 'Old Dish');
+  assert.deepEqual(dishes[0].restaurantIds, ['v4-restaurant-1'], 'pre-existing dish-restaurant links survive the upgrade untouched');
+
+  // journeys must now work against this upgraded database.
+  const loc2 = await createLocation('v4-dest', { name: 'New City' });
+  const journey = await createJourney('v4-dest', { fromLocationId: locations[0].id, toLocationId: loc2.id });
+  assert.ok(journey.id);
+  const journeyList = await listJourneys('v4-dest');
+  assert.equal(journeyList.length, 1);
+});
+
+await test('a full v1 -> v5 upgrade chain preserves an original Phase-0-era destination and its attraction', async () => {
+  // The oldest possible real-world shape: only the stores that existed
+  // at v1 (before Shopping/currency/locations/dishes/journeys).
+  const v1StoreNames = ['destinations', 'sources', 'attractions', 'restaurants', 'accommodations', 'transport', 'costs', 'practicalInfo', 'weatherNotes', 'packingNotes', 'generalNotes', 'intakeDocuments', 'candidates'];
+  const v1Db = await new Promise((resolve, reject) => {
+    const req = globalThis.indexedDB.open('dossier', 1);
+    req.onupgradeneeded = (event) => {
+      const db = event.target.result;
+      for (const name of v1StoreNames) {
+        const store = db.createObjectStore(name, { keyPath: 'id' });
+        if (name !== 'destinations') store.createIndex('destinationId', 'destinationId');
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  await new Promise((resolve, reject) => {
+    const tx = v1Db.transaction(['destinations', 'attractions'], 'readwrite');
+    tx.objectStore('destinations').put({ id: 'v1-dest', name: 'Original Darjeeling Research', overview: 'The very first destination' });
+    tx.objectStore('attractions').put({ id: 'v1-attraction', destinationId: 'v1-dest', place: { name: 'Batasia Loop' }, provenance: 'manual', deletedAt: null });
+    tx.oncomplete = resolve;
+    tx.onerror = reject;
+  });
+  v1Db.close();
+
+  __resetDbForTest();
+  const destination = await getDestination('v1-dest');
+  assert.ok(destination, 'the original v1 destination survives the full upgrade chain to v5');
+  assert.equal(destination.name, 'Original Darjeeling Research');
+  assert.equal(getDestinationDefaultCurrency(destination), 'INR');
+
+  const attractions = await listAttractions('v1-dest');
+  assert.equal(attractions.length, 1);
+  assert.equal(attractions[0].place.name, 'Batasia Loop');
+  assert.equal(attractions[0].locationId, undefined);
+  assert.equal(attractions[0].journeyId, undefined, 'a genuinely v1 record has neither locationId nor journeyId keys — both are read as absent/null everywhere they matter');
+
+  // Every store introduced since v1 must now be usable.
+  const location = await createLocation('v1-dest', { name: 'Darjeeling Town' });
+  assert.ok(location.id);
+  const dish = await createDish('v1-dest', { name: 'Momos' });
+  assert.ok(dish.id);
+  const loc2 = await createLocation('v1-dest', { name: 'Ghoom' });
+  const journey = await createJourney('v1-dest', { fromLocationId: location.id, toLocationId: loc2.id });
+  assert.ok(journey.id);
 });
 
 console.log(`\n=== ${passed} passed, ${failed} failed ===\n`);

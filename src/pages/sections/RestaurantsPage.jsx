@@ -1,7 +1,8 @@
 import { useState, useCallback } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, Link } from 'react-router-dom';
 import { getDestination } from '../../db/stores/destinations';
 import { listRestaurantEntries, createRestaurantEntry, updateRestaurantEntry, deleteRestaurantEntry, emptyRestaurantEntry, isPlaceBased } from '../../db/stores/restaurants';
+import { listDishes, linkDishToRestaurant, unlinkDishFromRestaurant } from '../../db/stores/dishes';
 import { useCachedQuery, invalidateCachedQuery, invalidateCachedQueryPrefix } from '../../hooks/useCachedQuery';
 import SectionPageLayout from '../../components/SectionPageLayout';
 import Card from '../../components/Card';
@@ -12,19 +13,20 @@ import { PriorityBadge } from '../../components/Badge';
 import { PlaceField, PlaceSummary } from '../../components/Place';
 import { MoneyField, MoneyDisplay } from '../../components/Money';
 import { EmptyState, LoadingState, ErrorState } from '../../components/States';
-import { getCurrencyOptions, addDestinationCurrency } from '../../db/currency.js';
+import { getCurrencyOptions, getDestinationDefaultCurrency, addDestinationCurrency } from '../../db/currency.js';
 import { RESTAURANT_PRICE_UNITS, RESTAURANT_DEFAULT_UNIT } from '../../lib/priceUnits.js';
 import Disclosure from '../../components/Disclosure';
 import { hasAdvancedContent } from '../../lib/formHelpers.js';
 import { isMoneyEmpty } from '../../db/shared.js';
+import { CATEGORY_HINTS } from '../../lib/placeLookup.js';
 
 export default function RestaurantsPage() {
   const { destinationId } = useParams();
   const [editing, setEditing] = useState(null);
 
   const fetcher = useCallback(async () => {
-    const [destination, items] = await Promise.all([getDestination(destinationId), listRestaurantEntries(destinationId)]);
-    return { destination, items };
+    const [destination, items, dishes] = await Promise.all([getDestination(destinationId), listRestaurantEntries(destinationId), listDishes(destinationId)]);
+    return { destination, items, dishes };
   }, [destinationId]);
   const { data, error, loading, refresh } = useCachedQuery(`restaurants:${destinationId}`, fetcher);
 
@@ -43,8 +45,9 @@ export default function RestaurantsPage() {
   if (error && !data) return <ErrorState description={error} onRetry={refresh} />;
   if (loading && !data) return <LoadingState label="Loading restaurants & food…" />;
 
-  const { destination, items } = data;
+  const { destination, items, dishes } = data;
   const currencies = getCurrencyOptions(destination);
+  const defaultCurrency = getDestinationDefaultCurrency(destination);
 
   async function handleAddCurrency(code) {
     await addDestinationCurrency(destinationId, code);
@@ -57,7 +60,9 @@ export default function RestaurantsPage() {
       {items.length === 0 ? (
         <EmptyState icon="🍽️" title="Nothing here yet" description="Add a specific restaurant, or a general food/dish note." actionLabel="+ Add" onAction={() => setEditing({})} />
       ) : (
-        items.map(item => (
+        items.map(item => {
+          const linkedDishes = dishes.filter(d => d.restaurantIds.includes(item.id));
+          return (
           <Card key={item.id} interactive padding="sm" accentColor="var(--color-coral)" className="entry-card" onClick={() => setEditing(item)}>
             <div className="entry-card__main">
               <div className="entry-card__title-line">
@@ -67,20 +72,31 @@ export default function RestaurantsPage() {
               {item.cuisine && <p className="entry-card__meta">{item.cuisine}</p>}
               {item.price && <p className="entry-card__meta"><MoneyDisplay money={item.price} /></p>}
               {item.mustTryDishes?.length > 0 && <p className="entry-card__meta">Try: {item.mustTryDishes.join(', ')}</p>}
+              {linkedDishes.length > 0 && (
+                <p className="entry-card__meta">
+                  Recommended dishes: {linkedDishes.map((d, i) => (
+                    <span key={d.id}>
+                      {i > 0 && ', '}
+                      <Link to={`/destinations/${destinationId}/dishes`} onClick={e => e.stopPropagation()}>{d.name}</Link>
+                    </span>
+                  ))}
+                </p>
+              )}
             </div>
             <button type="button" className="entry-card__delete" onClick={(e) => { e.stopPropagation(); handleDelete(item); }}>Delete</button>
           </Card>
-        ))
+          );
+        })
       )}
 
       {editing !== null && (
-        <RestaurantForm destinationId={destinationId} record={editing.id ? editing : null} currencies={currencies} onAddCurrency={handleAddCurrency} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); afterMutation(); }} />
+        <RestaurantForm destinationId={destinationId} destinationName={destination.name} record={editing.id ? editing : null} currencies={currencies} defaultCurrency={defaultCurrency} dishes={dishes} onAddCurrency={handleAddCurrency} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); afterMutation(); }} onLinksChanged={afterMutation} />
       )}
     </SectionPageLayout>
   );
 }
 
-function RestaurantForm({ destinationId, record, currencies, onAddCurrency, onClose, onSaved }) {
+function RestaurantForm({ destinationId, destinationName, record, currencies, defaultCurrency, dishes, onAddCurrency, onClose, onSaved, onLinksChanged }) {
   const base = record || emptyRestaurantEntry();
   const [hasPlace, setHasPlace] = useState(Boolean(base.place && base.place.name));
   const [place, setPlace] = useState(base.place || {});
@@ -129,7 +145,7 @@ function RestaurantForm({ destinationId, record, currencies, onAddCurrency, onCl
       <form onSubmit={handleSubmit}>
         <Checkbox label="This is a specific restaurant (has a place)" checked={hasPlace} onChange={e => setHasPlace(e.target.checked)} />
         {hasPlace ? (
-          <PlaceField value={place} onChange={setPlace} />
+          <PlaceField value={place} onChange={setPlace} destinationName={destinationName} expectedCategory={CATEGORY_HINTS.restaurant} />
         ) : (
           <Input label="Dish / food note name" required value={dishName} onChange={e => setDishName(e.target.value)} placeholder="e.g. Hoppers" />
         )}
@@ -137,7 +153,7 @@ function RestaurantForm({ destinationId, record, currencies, onAddCurrency, onCl
         <TextArea label="Dietary notes" value={dietaryNotes} onChange={e => setDietaryNotes(e.target.value)} rows={2} placeholder="A quick note is enough to save this — add price and must-try dishes below if you have them." />
 
         <Disclosure label="Add more details" defaultOpen={advancedHasContent}>
-          <MoneyField value={price} onChange={setPrice} currencies={currencies} defaultCurrency="INR" unitOptions={RESTAURANT_PRICE_UNITS} defaultUnit={RESTAURANT_DEFAULT_UNIT} onAddCurrency={onAddCurrency} />
+          <MoneyField value={price} onChange={setPrice} currencies={currencies} defaultCurrency={defaultCurrency} unitOptions={RESTAURANT_PRICE_UNITS} defaultUnit={RESTAURANT_DEFAULT_UNIT} onAddCurrency={onAddCurrency} />
           <Input label="Must-try dishes (comma separated)" value={mustTryDishes} onChange={e => setMustTryDishes(e.target.value)} />
           <Select label="Priority" value={priority} onChange={e => setPriority(e.target.value)}>
             <option value="">No priority set</option>
@@ -147,6 +163,38 @@ function RestaurantForm({ destinationId, record, currencies, onAddCurrency, onCl
             <option value="reference">Reference</option>
           </Select>
         </Disclosure>
+
+        {record && dishes.length > 0 && (
+          <div className="field">
+            <span className="field__label">Recommended / must-try dishes here</span>
+            <p className="field__hint" style={{ marginTop: 0 }}>Tap a dish to link or unlink it — this updates the same relationship you'll see when viewing that dish's own page.</p>
+            <div className="dish-form__restaurant-list">
+              {dishes.map(dish => {
+                const linked = dish.restaurantIds.includes(record.id);
+                return (
+                  <label key={dish.id} className="field field--checkbox">
+                    <input
+                      type="checkbox"
+                      checked={linked}
+                      onChange={async (e) => {
+                        if (e.target.checked) await linkDishToRestaurant(dish.id, record.id);
+                        else await unlinkDishFromRestaurant(dish.id, record.id);
+                        onLinksChanged();
+                      }}
+                    />
+                    <span>{dish.name}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        )}
+        {record && dishes.length === 0 && (
+          <p className="entry-card__meta">No dishes added yet — add one from the Dishes section, then come back here to link it.</p>
+        )}
+        {!record && dishes.length > 0 && (
+          <p className="entry-card__meta">Save this restaurant first, then reopen it to link dishes to it.</p>
+        )}
 
         {error && <p className="form-error" role="alert">{error}</p>}
         <Button type="submit" fullWidth disabled={submitting}>{submitting ? 'Saving…' : 'Save'}</Button>

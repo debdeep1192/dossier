@@ -1,10 +1,10 @@
 import { useState } from 'react';
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
 import QuickAdd from './QuickAdd';
 import './AppShell.css';
 
 const NAV_ITEMS = [
-  { to: '/', label: 'Research', icon: '📖' },
+  { to: '/', label: 'Home', icon: '🏠' },
 ];
 
 // `children`, when provided, replaces the routed <Outlet /> content —
@@ -28,10 +28,10 @@ export default function AppShell({ children }) {
   return (
     <div className="app-shell">
       <aside className="app-shell__sidebar">
-        <div className="app-shell__brand">
+        <Link to="/" className="app-shell__brand">
           <span className="app-shell__brand-mark">D</span>
           <span className="app-shell__brand-name">Dossier</span>
-        </div>
+        </Link>
         <button type="button" className="app-shell__quick-add" onClick={() => setQuickAddOpen(true)}>
           + Add to Dossier
         </button>

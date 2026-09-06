@@ -11,6 +11,7 @@ export function emptyAttraction() {
   return {
     place: emptyPlace(),
     category: '',
+    categoryOther: '', // free-text explanation when category === 'Other' — see components/OtherSelect.jsx
     description: '', // UI label "Notes" — qualitative info that doesn't belong in a structured field
     feeBands: [emptyFeeBand()], // replaces the old single `price` field — see FeeBands.jsx
     cameraCharge: null, // Money, optional
@@ -18,6 +19,7 @@ export function emptyAttraction() {
     openingHours: emptyOpeningHours(), // replaces the old free-text openingHours string
     typicallySpent: '', // free text, e.g. "1-2 hours" — replaces typicalDurationMinutes
     bestTimeOfDay: { option: '', note: '' }, // replaces the old free-text bestTimeOfDay string
+    journeyId: null, // optional — set when this attraction is "along the way" between two locations rather than at one; see db/stores/journeys.js and components/JourneyField.jsx. Deliberately NOT in commonMetadata(): only sections where journey context is useful declare this field on their own shape.
   };
 }
 

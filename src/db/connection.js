@@ -30,7 +30,18 @@ const DB_NAME = 'dossier';
 // additive, same as v1->v2: onupgradeneeded's "create if missing" loop
 // below means upgrading only ever adds the new store; every existing
 // store and its data is left completely untouched.
-const DB_VERSION = 3;
+// v3 -> v4: added the `dishes` store (independent food items, optionally
+// linked to one or more restaurants — see db/stores/dishes.js, item 8).
+// The `restaurants` store itself is unchanged in shape; older dish-only
+// restaurant records (no place set) are untouched and still read
+// correctly via isPlaceBased() in restaurants.js. Also purely additive.
+// v4 -> v5: added the `journeys` store (travel between two existing
+// cities/locations within a destination — see db/stores/journeys.js).
+// Records that support journey context get an optional `journeyId`
+// added to THEIR OWN shape only (not to commonMetadata — see
+// shared.js), so sections that never use journeys are completely
+// unaffected. Also purely additive; no existing store or field changes.
+const DB_VERSION = 5;
 
 // One object store per research section (each a genuinely distinct
 // shape defined in db/stores/*.js — never a shared "item_kind" bucket),
@@ -39,9 +50,11 @@ const DB_VERSION = 3;
 const STORE_DEFS = [
   { name: 'destinations', keyPath: 'id', indexes: [] },
   { name: 'locations', keyPath: 'id', indexes: [['destinationId', 'destinationId']] },
+  { name: 'journeys', keyPath: 'id', indexes: [['destinationId', 'destinationId']] },
   { name: 'sources', keyPath: 'id', indexes: [['destinationId', 'destinationId']] },
   { name: 'attractions', keyPath: 'id', indexes: [['destinationId', 'destinationId']] },
   { name: 'restaurants', keyPath: 'id', indexes: [['destinationId', 'destinationId']] },
+  { name: 'dishes', keyPath: 'id', indexes: [['destinationId', 'destinationId']] },
   { name: 'accommodations', keyPath: 'id', indexes: [['destinationId', 'destinationId']] },
   { name: 'transport', keyPath: 'id', indexes: [['destinationId', 'destinationId']] },
   { name: 'costs', keyPath: 'id', indexes: [['destinationId', 'destinationId']] },
@@ -60,11 +73,11 @@ const STORE_DEFS = [
   },
 ];
 
-// The 9 stores that hold actual research entries (everything except
+// The stores that hold actual research entries (everything except
 // destinations/sources/intakeDocuments/candidates, which are the shared
 // building blocks, not sections themselves).
 export const SECTION_STORES = [
-  'attractions', 'restaurants', 'accommodations', 'transport',
+  'attractions', 'restaurants', 'dishes', 'accommodations', 'transport',
   'costs', 'practicalInfo', 'weatherNotes', 'packingNotes', 'generalNotes', 'shoppingItems',
 ];
 

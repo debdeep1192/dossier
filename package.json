@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "test": "node src/db/__tests__/foundation.test.js",
     "test:pdf": "node src/db/__tests__/pdf.test.js",
-    "test:all": "npm test && npm run test:pdf"
+    "test:place-lookup": "node src/db/__tests__/placeLookup.test.js",
+    "test:all": "npm test && npm run test:pdf && npm run test:place-lookup"
   },
   "dependencies": {
     "pdfjs-dist": "^6.2.108",

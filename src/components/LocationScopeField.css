@@ -1,0 +1,31 @@
+.location-scope-field__locked {
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+  background: var(--color-surface-subtle, var(--color-bg-subtle, #f3f4f6));
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-3);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.location-scope-field__change {
+  background: none;
+  border: none;
+  color: var(--color-teal);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+}
+
+.location-scope-field { margin-bottom: var(--space-3); }
+
+.location-scope-field__between-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.location-scope-field__between-row .field { flex: 1; margin-bottom: 0; }

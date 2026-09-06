@@ -22,9 +22,9 @@
 import { SECTIONS } from './sectionRegistry.js';
 import { createAttraction } from './db/stores/attractions.js';
 import { createRestaurantEntry } from './db/stores/restaurants.js';
+import { createDish } from './db/stores/dishes.js';
 import { createAccommodation } from './db/stores/accommodations.js';
 import { createTransportEntry } from './db/stores/transport.js';
-import { createCostEntry } from './db/stores/costs.js';
 import { createPracticalInfoEntry } from './db/stores/practicalInfo.js';
 import { createWeatherNote } from './db/stores/weatherNotes.js';
 import { createPackingNote } from './db/stores/packingNotes.js';
@@ -83,6 +83,17 @@ export const QUICK_ADD_TYPES = [
     }),
   },
   {
+    key: 'dishes',
+    label: LABELS.dishes,
+    icon: ICONS.dishes,
+    create: createDish,
+    quickFields: [
+      { kind: 'name', key: 'name', placeholder: 'Dish name, e.g. Momos' },
+      { kind: 'note', key: 'note', placeholder: 'Quick note — where to find it, why it stood out' },
+    ],
+    buildFields: (v) => ({ name: v.name || '', notes: v.note || '' }),
+  },
+  {
     key: 'accommodations',
     label: LABELS.accommodations,
     icon: ICONS.accommodations,
@@ -104,17 +115,6 @@ export const QUICK_ADD_TYPES = [
       { kind: 'note', key: 'note', placeholder: 'Quick note — mode, price, timing' },
     ],
     buildFields: (v) => ({ from: { label: v.fromLabel || '', place: null }, to: { label: v.toLabel || '', place: null }, bookingNotes: v.note || '' }),
-  },
-  {
-    key: 'costs',
-    label: LABELS.costs,
-    icon: ICONS.costs,
-    create: createCostEntry,
-    quickFields: [
-      { kind: 'name', key: 'item', placeholder: 'What is this cost for? e.g. Local SIM card' },
-      { kind: 'note', key: 'note', placeholder: 'Quick note — amount, where, anything useful' },
-    ],
-    buildFields: (v) => ({ item: v.item || '', context: v.note || '' }),
   },
   {
     key: 'practicalInfo',

@@ -7,21 +7,32 @@ import { extractCandidates } from '../extraction.js';
 // later means adding one line here, not touching the review flow itself.
 import { createAttraction } from './attractions.js';
 import { createRestaurantEntry } from './restaurants.js';
+import { createDish } from './dishes.js';
 import { createAccommodation } from './accommodations.js';
 import { createTransportEntry } from './transport.js';
-import { createCostEntry } from './costs.js';
 import { createPracticalInfoEntry } from './practicalInfo.js';
 import { createWeatherNote } from './weatherNotes.js';
 import { createPackingNote } from './packingNotes.js';
 import { createGeneralNote } from './generalNotes.js';
 import { createShoppingItem } from './shoppingItems.js';
 
+// NOTE on Costs: intentionally NOT in this map. The Costs section was
+// retired from the UI (see sectionRegistry.js) — ReviewPage.jsx's
+// section dropdown already never offers 'costs' as a choice, but
+// acceptCandidate() below trusts whatever `section` string it's given,
+// so leaving a working 'costs' entry here would have been a second,
+// independent way an invisible Cost record could still be created
+// (e.g. by a future caller that didn't go through today's dropdown).
+// Removing the entry closes that at its source rather than relying
+// only on the caller's own discipline. createCostEntry, the `costs`
+// store, and any data already saved there are completely unaffected —
+// this only removes the wiring that let new ones be created silently.
 const CREATORS = {
   attractions: createAttraction,
   restaurants: createRestaurantEntry,
+  dishes: createDish,
   accommodations: createAccommodation,
   transport: createTransportEntry,
-  costs: createCostEntry,
   practicalInfo: createPracticalInfoEntry,
   weatherNotes: createWeatherNote,
   packingNotes: createPackingNote,

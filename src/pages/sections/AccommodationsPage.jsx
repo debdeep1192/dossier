@@ -1,8 +1,9 @@
 import { useState, useCallback } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import { getDestination } from '../../db/stores/destinations';
 import { listAccommodations, createAccommodation, updateAccommodation, deleteAccommodation, emptyAccommodation } from '../../db/stores/accommodations';
-import { getCurrencyOptions, addDestinationCurrency } from '../../db/currency.js';
+import { listLocations, describeLocationContext } from '../../db/stores/locations';
+import { getCurrencyOptions, getDestinationDefaultCurrency, addDestinationCurrency } from '../../db/currency.js';
 import { useCachedQuery, invalidateCachedQuery, invalidateCachedQueryPrefix } from '../../hooks/useCachedQuery';
 import SectionPageLayout from '../../components/SectionPageLayout';
 import Card from '../../components/Card';
@@ -17,14 +18,19 @@ import { ACCOMMODATION_TYPES, ACCOMMODATION_PRICE_BASIS, ACCOMMODATION_DEFAULT_P
 import Disclosure from '../../components/Disclosure';
 import { hasAdvancedContent } from '../../lib/formHelpers.js';
 import { isMoneyEmpty } from '../../db/shared.js';
+import OtherSelect from '../../components/OtherSelect';
+import { CATEGORY_HINTS } from '../../lib/placeLookup.js';
+import LocationScopeField from '../../components/LocationScopeField';
 
 export default function AccommodationsPage() {
   const { destinationId } = useParams();
+  const [searchParams] = useSearchParams();
+  const contextLocationId = searchParams.get('location') || null;
   const [editing, setEditing] = useState(null);
 
   const fetcher = useCallback(async () => {
-    const [destination, items] = await Promise.all([getDestination(destinationId), listAccommodations(destinationId)]);
-    return { destination, items };
+    const [destination, items, locations] = await Promise.all([getDestination(destinationId), listAccommodations(destinationId), listLocations(destinationId)]);
+    return { destination, items, locations };
   }, [destinationId]);
   const { data, error, loading, refresh } = useCachedQuery(`accommodations:${destinationId}`, fetcher);
 
@@ -49,22 +55,26 @@ export default function AccommodationsPage() {
   if (error && !data) return <ErrorState description={error} onRetry={refresh} />;
   if (loading && !data) return <LoadingState label="Loading accommodation…" />;
 
-  const { destination, items } = data;
+  const { destination, items, locations } = data;
   const currencies = getCurrencyOptions(destination);
+  const defaultCurrency = getDestinationDefaultCurrency(destination);
+  const contextLocation = locations.find(l => l.id === contextLocationId) || null;
+  const visibleItems = contextLocationId ? items.filter(i => i.locationId === contextLocationId) : items;
 
   return (
-    <SectionPageLayout destination={destination} destinationId={destinationId} title="Accommodation" onAdd={() => setEditing({})}>
-      {items.length === 0 ? (
+    <SectionPageLayout destination={destination} destinationId={destinationId} locationLabel={contextLocation?.name} title="Accommodation" onAdd={() => setEditing({})}>
+      {visibleItems.length === 0 ? (
         <EmptyState icon="🛏️" title="No accommodation yet" description="Add hotels, guesthouses, or homestays you're researching." actionLabel="+ Add" onAction={() => setEditing({})} />
       ) : (
-        items.map(item => (
+        visibleItems.map(item => (
           <Card key={item.id} interactive padding="sm" accentColor="var(--color-saffron-dark)" className="entry-card" onClick={() => setEditing(item)}>
             <div className="entry-card__main">
               <div className="entry-card__title-line">
                 <PlaceSummary place={item.place} destinationName={destination.name} />
                 <PriorityBadge priority={item.priority} />
               </div>
-              {item.accommodationType && <p className="entry-card__meta">{item.accommodationType}{item.roomType ? ` · ${item.roomType}` : ''}</p>}
+              {!contextLocationId && locations.length > 0 && <p className="entry-card__meta">{describeLocationContext(item.locationId, locations)}</p>}
+              {item.accommodationType && <p className="entry-card__meta">{item.accommodationType === 'Other' ? (item.accommodationTypeOther || 'Other') : item.accommodationType}{item.roomType ? ` · ${item.roomType}` : ''}</p>}
               {item.price && <p className="entry-card__meta"><MoneyDisplay money={item.price} /></p>}
             </div>
             <button type="button" className="entry-card__delete" onClick={(e) => { e.stopPropagation(); handleDelete(item); }}>Delete</button>
@@ -73,16 +83,18 @@ export default function AccommodationsPage() {
       )}
 
       {editing !== null && (
-        <AccommodationForm destinationId={destinationId} record={editing.id ? editing : null} currencies={currencies} onAddCurrency={handleAddCurrency} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); afterMutation(); }} />
+        <AccommodationForm destinationId={destinationId} destinationName={destination.name} record={editing.id ? editing : null} currencies={currencies} defaultCurrency={defaultCurrency} locations={locations} contextLocationId={contextLocationId} onAddCurrency={handleAddCurrency} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); afterMutation(); }} />
       )}
     </SectionPageLayout>
   );
 }
 
-function AccommodationForm({ destinationId, record, currencies, onAddCurrency, onClose, onSaved }) {
+function AccommodationForm({ destinationId, destinationName, record, currencies, defaultCurrency, locations, contextLocationId, onAddCurrency, onClose, onSaved }) {
   const base = record || emptyAccommodation();
   const [place, setPlace] = useState(base.place || {});
+  const [locationId, setLocationId] = useState(base.locationId ?? contextLocationId ?? null);
   const [accommodationType, setAccommodationType] = useState(base.accommodationType || '');
+  const [accommodationTypeOther, setAccommodationTypeOther] = useState(base.accommodationTypeOther || '');
   const [price, setPrice] = useState(base.price || null);
   const [roomType, setRoomType] = useState(base.roomType || '');
   const [checkIn, setCheckIn] = useState(base.checkIn || '');
@@ -106,7 +118,7 @@ function AccommodationForm({ destinationId, record, currencies, onAddCurrency, o
     setError('');
     setSubmitting(true);
     try {
-      const fields = { place, accommodationType, price, roomType, checkIn, checkOut, amenityNotes, priority: priority || null };
+      const fields = { place, locationId, accommodationType, accommodationTypeOther: accommodationType === 'Other' ? accommodationTypeOther : '', price, roomType, checkIn, checkOut, amenityNotes, priority: priority || null };
       if (record) await updateAccommodation(record.id, fields);
       else await createAccommodation(destinationId, fields);
       onSaved();
@@ -120,11 +132,15 @@ function AccommodationForm({ destinationId, record, currencies, onAddCurrency, o
   return (
     <Modal open onClose={onClose} title={record ? 'Edit Accommodation' : 'New Accommodation'}>
       <form onSubmit={handleSubmit}>
-        <PlaceField value={place} onChange={setPlace} />
-        <Select label="Type" value={accommodationType} onChange={e => setAccommodationType(e.target.value)}>
-          <option value="">Choose a type…</option>
-          {ACCOMMODATION_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-        </Select>
+        <PlaceField
+          value={place}
+          onChange={setPlace}
+          locationName={locations.find(l => l.id === locationId)?.name}
+          destinationName={destinationName}
+          expectedCategory={CATEGORY_HINTS.accommodation}
+        />
+        <LocationScopeField locations={locations} value={locationId} onChange={setLocationId} lockedLocationId={record ? null : contextLocationId} />
+        <OtherSelect label="Type" value={accommodationType} otherValue={accommodationTypeOther} onChange={setAccommodationType} onOtherChange={setAccommodationTypeOther} options={ACCOMMODATION_TYPES} />
         <TextArea label="Amenity notes" value={amenityNotes} onChange={e => setAmenityNotes(e.target.value)} rows={2} placeholder="A quick note is enough to save this — add price, room type, and other details below if you have them." />
 
         <Disclosure label="Add more details" defaultOpen={advancedHasContent}>
@@ -133,7 +149,7 @@ function AccommodationForm({ destinationId, record, currencies, onAddCurrency, o
             value={price}
             onChange={setPrice}
             currencies={currencies}
-            defaultCurrency="INR"
+            defaultCurrency={defaultCurrency}
             unitOptions={ACCOMMODATION_PRICE_BASIS}
             defaultUnit={ACCOMMODATION_DEFAULT_PRICE_BASIS}
             onAddCurrency={onAddCurrency}

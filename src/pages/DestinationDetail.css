@@ -50,3 +50,96 @@
   font-size: var(--text-xs);
   color: var(--color-text-muted);
 }
+
+/* ---- Locations panel ---- */
+.locations-panel {
+  margin-bottom: var(--space-5);
+}
+
+.locations-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-2);
+}
+
+.locations-panel__title {
+  font-weight: 600;
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+}
+
+.locations-panel__manage-toggle {
+  background: none;
+  border: none;
+  color: var(--color-teal);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+}
+
+.locations-panel__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.locations-panel__chip-wrap {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.locations-panel__chip {
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-full, 999px);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: background-color var(--transition-fast), border-color var(--transition-fast);
+}
+.locations-panel__chip:hover { border-color: var(--color-border-strong); }
+.locations-panel__chip--active {
+  background: var(--color-teal);
+  border-color: var(--color-teal);
+  color: white;
+}
+
+.locations-panel__chip-actions {
+  display: flex;
+  gap: 2px;
+}
+.locations-panel__chip-actions button {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: var(--text-sm);
+  padding: 2px 4px;
+  color: var(--color-text-muted);
+}
+.locations-panel__chip-actions button:hover { color: var(--color-text-primary); }
+
+.locations-panel__rename-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.locations-panel__rename-row .field { margin-bottom: 0; }
+.locations-panel__rename-row button {
+  background: var(--color-teal);
+  color: white;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.locations-panel__add-form {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+}
+.locations-panel__add-form .field { flex: 1; margin-bottom: 0; }

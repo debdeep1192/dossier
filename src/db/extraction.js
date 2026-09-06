@@ -31,8 +31,7 @@ const SECTION_KEYWORDS = [
   { section: 'restaurants', words: ['restaurant', 'food', 'eat', 'dining', 'cuisine', 'where to eat', 'must-try dish', 'dishes'] },
   { section: 'accommodations', words: ['hotel', 'stay', 'accommodation', 'lodging', 'where to sleep', 'where to stay'] },
   { section: 'transport', words: ['transport', 'getting around', 'getting there', 'travel between', 'how to reach'] },
-  { section: 'costs', words: ['cost', 'budget', 'money', 'price', 'expense'] },
-  { section: 'practicalInfo', words: ['practical', 'visa', 'safety', 'tips', 'connectivity', 'health', 'emergency'] },
+  { section: 'practicalInfo', words: ['cost', 'budget', 'money', 'price', 'expense', 'practical', 'visa', 'safety', 'tips', 'connectivity', 'health', 'emergency'] },
   { section: 'weatherNotes', words: ['weather', 'season', 'best time', 'climate'] },
   { section: 'packingNotes', words: ['pack', 'what to bring', 'what to wear', 'gear'] },
   { section: 'shoppingItems', words: ['shopping', 'what to buy', 'souvenir'] },
@@ -348,9 +347,9 @@ function mapTableRowToFields(cells, columnRoles) {
 const REST_FIELD_BY_SECTION = {
   attractions: 'description',
   restaurants: 'dietaryNotes',
+  dishes: 'notes',
   accommodations: 'amenityNotes',
   transport: 'bookingNotes',
-  costs: 'context',
   practicalInfo: 'details',
   weatherNotes: 'description',
   packingNotes: 'remarks',
@@ -368,8 +367,6 @@ function buildProposedFields(section, text) {
 
   if (PLACE_BASED_SECTIONS.has(section)) {
     fields.placeName = label;
-  } else if (section === 'costs') {
-    fields.item = label;
   } else if (section === 'practicalInfo') {
     fields.topic = label;
   } else if (section === 'weatherNotes') {

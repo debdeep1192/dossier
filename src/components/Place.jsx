@@ -1,5 +1,6 @@
 import { Input } from './Field';
 import { buildGoogleMapsUrl } from '../lib/googleMaps';
+import PlaceLookup from './PlaceLookup';
 import './Place.css';
 
 export { buildGoogleMapsUrl };
@@ -27,7 +28,12 @@ export function PlaceSummary({ place, destinationName }) {
   );
 }
 
-export function PlaceField({ value, onChange, label = 'Place' }) {
+// `locationName`/`destinationName`/`expectedCategory` are optional —
+// when provided, they feed the "Find Place" lookup's contextual query
+// and ranking (see lib/placeLookup.js). A caller with no location
+// context yet can still use PlaceField normally; Find Place just
+// searches with less context (name + destination only, or name alone).
+export function PlaceField({ value, onChange, label = 'Place', locationName, destinationName, expectedCategory }) {
   const place = value || {};
   function update(patch) {
     onChange({ ...place, ...patch });
@@ -40,6 +46,19 @@ export function PlaceField({ value, onChange, label = 'Place' }) {
         <Input placeholder="Area / locality" aria-label={`${label} locality`} value={place.locality || ''} onChange={e => update({ locality: e.target.value })} />
         <Input placeholder="City" aria-label={`${label} city`} value={place.city || ''} onChange={e => update({ city: e.target.value })} />
       </div>
+      <PlaceLookup
+        name={place.name}
+        locationName={locationName}
+        destinationName={destinationName}
+        expectedCategory={expectedCategory}
+        onConfirm={(found) => update({
+          name: found.name || place.name,
+          locality: found.locality || place.locality,
+          city: found.city || place.city,
+          lat: found.lat ?? place.lat,
+          lng: found.lng ?? place.lng,
+        })}
+      />
       <Input
         placeholder="Google Maps link (optional — paste a share link if you have one)"
         aria-label={`${label} Google Maps URL`}

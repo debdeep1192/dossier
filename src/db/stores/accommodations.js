@@ -6,7 +6,8 @@ const STORE = 'accommodations';
 export function emptyAccommodation() {
   return {
     place: emptyPlace(),
-    accommodationType: '', // free text: hotel/guesthouse/homestay/hostel
+    accommodationType: '', // one of ACCOMMODATION_TYPES, or 'Other'
+    accommodationTypeOther: '', // free-text explanation when accommodationType === 'Other' — see components/OtherSelect.jsx
     price: emptyMoney(), // per night
     roomType: '',
     checkIn: '',

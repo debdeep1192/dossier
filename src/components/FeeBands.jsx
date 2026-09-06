@@ -4,7 +4,7 @@ import { CORE_CURRENCIES } from '../db/currency.js';
 import { FEE_STATUS_OPTIONS, emptyFeeBand } from '../lib/feeBands.js';
 import './FeeBands.css';
 
-export function FeeBandsField({ label = 'Entry fee', bands, onChange, currencies = CORE_CURRENCIES, onAddCurrency }) {
+export function FeeBandsField({ label = 'Entry fee', bands, onChange, currencies = CORE_CURRENCIES, defaultCurrency, onAddCurrency }) {
   const list = bands && bands.length > 0 ? bands : [emptyFeeBand()];
 
   function updateBand(index, patch) {
@@ -34,7 +34,7 @@ export function FeeBandsField({ label = 'Entry fee', bands, onChange, currencies
           {(band.status === 'paid' || band.status === 'nominal') && (
             <div className="fee-bands__amount-row">
               <Input type="number" min="0" step="0.01" placeholder="Amount" aria-label="Fee amount" value={band.amount} onChange={e => updateBand(i, { amount: e.target.value })} />
-              <CurrencyPicker value={band.currency} onChange={c => updateBand(i, { currency: c })} currencies={currencies} onAddCurrency={onAddCurrency} />
+              <CurrencyPicker value={band.currency || defaultCurrency || ''} onChange={c => updateBand(i, { currency: c })} currencies={currencies} onAddCurrency={onAddCurrency} />
             </div>
           )}
           {list.length > 1 && (

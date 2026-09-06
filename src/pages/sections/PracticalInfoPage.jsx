@@ -7,11 +7,12 @@ import SectionPageLayout from '../../components/SectionPageLayout';
 import Card from '../../components/Card';
 import Button from '../../components/Button';
 import Modal from '../../components/Modal';
-import { Input, TextArea, Select } from '../../components/Field';
+import { Input, TextArea } from '../../components/Field';
 import { EmptyState, LoadingState, ErrorState } from '../../components/States';
 import { PRACTICAL_INFO_TOPICS } from '../../lib/practicalInfoOptions.js';
 import Disclosure from '../../components/Disclosure';
 import { hasAdvancedContent } from '../../lib/formHelpers.js';
+import OtherSelect from '../../components/OtherSelect';
 
 export default function PracticalInfoPage() {
   const { destinationId } = useParams();
@@ -48,7 +49,7 @@ export default function PracticalInfoPage() {
         items.map(item => (
           <Card key={item.id} interactive padding="sm" accentColor="var(--color-teal-dark)" className="entry-card" onClick={() => setEditing(item)}>
             <div className="entry-card__main">
-              <span className="entry-card__title">{item.topic}{item.name ? ` — ${item.name}` : ''}</span>
+              <span className="entry-card__title">{item.topic === 'Other' ? (item.topicOther || 'Other') : item.topic}{item.name ? ` — ${item.name}` : ''}</span>
               {item.phone && <p className="entry-card__meta">📞 {item.phone}</p>}
               {item.location && <p className="entry-card__meta">{item.location}</p>}
               {item.details && <p className="entry-card__meta">{item.details}</p>}
@@ -68,6 +69,7 @@ export default function PracticalInfoPage() {
 function PracticalInfoForm({ destinationId, record, onClose, onSaved }) {
   const base = record || emptyPracticalInfoEntry();
   const [topic, setTopic] = useState(base.topic || '');
+  const [topicOther, setTopicOther] = useState(base.topicOther || '');
   const [name, setName] = useState(base.name || '');
   const [location, setLocation] = useState(base.location || '');
   const [address, setAddress] = useState(base.address || '');
@@ -87,7 +89,7 @@ function PracticalInfoForm({ destinationId, record, onClose, onSaved }) {
     setError('');
     setSubmitting(true);
     try {
-      const fields = { topic, name, location, address, phone, email, website, googleMapsUrl, details };
+      const fields = { topic, topicOther: topic === 'Other' ? topicOther : '', name, location, address, phone, email, website, googleMapsUrl, details };
       if (record) await updatePracticalInfoEntry(record.id, fields);
       else await createPracticalInfoEntry(destinationId, fields);
       onSaved();
@@ -101,10 +103,7 @@ function PracticalInfoForm({ destinationId, record, onClose, onSaved }) {
   return (
     <Modal open onClose={onClose} title={record ? 'Edit Practical Info' : 'New Practical Info'}>
       <form onSubmit={handleSubmit}>
-        <Select label="Topic" value={topic} onChange={e => setTopic(e.target.value)}>
-          <option value="">Choose a topic…</option>
-          {PRACTICAL_INFO_TOPICS.map(t => <option key={t} value={t}>{t}</option>)}
-        </Select>
+        <OtherSelect label="Topic" value={topic} otherValue={topicOther} onChange={setTopic} onOtherChange={setTopicOther} options={PRACTICAL_INFO_TOPICS} />
 
         <TextArea label="Details / Notes" value={details} onChange={e => setDetails(e.target.value)} rows={4} placeholder="e.g. Airtel works reasonably well in central Darjeeling…" />
 
