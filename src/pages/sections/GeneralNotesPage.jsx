@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
+import { useAutoOpenNewForm } from '../../hooks/useAutoOpenNewForm';
 import { getDestination } from '../../db/stores/destinations';
 import { listGeneralNotes, createGeneralNote, updateGeneralNote, deleteGeneralNote, emptyGeneralNote } from '../../db/stores/generalNotes';
 import { useCachedQuery, invalidateCachedQuery, invalidateCachedQueryPrefix } from '../../hooks/useCachedQuery';
@@ -13,6 +14,7 @@ import { EmptyState, LoadingState, ErrorState } from '../../components/States';
 export default function GeneralNotesPage() {
   const { destinationId } = useParams();
   const [editing, setEditing] = useState(null);
+  useAutoOpenNewForm(setEditing);
 
   const fetcher = useCallback(async () => {
     const [destination, items] = await Promise.all([getDestination(destinationId), listGeneralNotes(destinationId)]);

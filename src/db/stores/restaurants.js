@@ -30,6 +30,13 @@ export function emptyRestaurantEntry() {
     price: emptyMoney(),
     mustTryDishes: [], // string[] — legacy free-text list; new dish-restaurant links belong in dishes.js instead
     dietaryNotes: '',
+    // Price-tier classification — replaces the generic shared
+    // `priority` (commonMetadata) for this section, same reasoning as
+    // attractions.js's visitPriority: 'budget' | 'regular' |
+    // 'fine_dining' | null. commonMetadata's `priority` field still
+    // exists on every restaurant record but is not shown/set by this
+    // section's form going forward.
+    priceTier: null,
   };
 }
 

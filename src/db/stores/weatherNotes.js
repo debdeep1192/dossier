@@ -8,9 +8,22 @@ const STORE = 'weatherNotes';
 // should be able to describe "January–April" as one record just as
 // easily as "December" alone; see lib/weatherOptions.js for the month
 // list the UI offers as a starting point.
+//
+// startDate/endDate (Phase 3 Chunk 3) are additive, optional, exact
+// dates for when `period` alone isn't precise enough — e.g. "Safari
+// season: 1 July - 15 September" rather than just "July-September".
+// Plain YYYY-MM-DD strings, no timezone handling at all (deliberately
+// — this is a description of a season/period, not a scheduled event
+// with a specific instant). `period` remains the required, always-
+// present field; the dates are an optional precision layer on top of
+// it, not a replacement — a record with only `period` set (as every
+// pre-Chunk-3 record necessarily is) remains completely valid and is
+// never required to have dates.
 export function emptyWeatherNote() {
   return {
     period: '',
+    startDate: '',
+    endDate: '',
     description: '',
     temperatureMin: '',
     temperatureMax: '',

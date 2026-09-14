@@ -19,6 +19,16 @@ export function emptyAttraction() {
     openingHours: emptyOpeningHours(), // replaces the old free-text openingHours string
     typicallySpent: '', // free text, e.g. "1-2 hours" — replaces typicalDurationMinutes
     bestTimeOfDay: { option: '', note: '' }, // replaces the old free-text bestTimeOfDay string
+    // Personal visit importance — replaces the generic shared `priority`
+    // (commonMetadata) for this section, which was too generic to be
+    // meaningful ("must_know"/"useful"/"optional"/"reference" applied
+    // identically to every section). This is NOT a quality/rating
+    // judgment about the place itself — it's the person's own plan:
+    // 'must_see' | 'maybe' | 'skippable' | null. commonMetadata's
+    // `priority` field still exists on every attraction record (it's
+    // shared infrastructure) but is simply not shown/set by this
+    // section's form going forward.
+    visitPriority: null,
     journeyId: null, // optional — set when this attraction is "along the way" between two locations rather than at one; see db/stores/journeys.js and components/JourneyField.jsx. Deliberately NOT in commonMetadata(): only sections where journey context is useful declare this field on their own shape.
   };
 }

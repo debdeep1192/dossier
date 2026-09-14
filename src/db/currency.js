@@ -80,12 +80,29 @@ export async function listExchangeRates() {
 // Looks up a direct rate (from -> to) or, failing that, derives it from
 // the inverse rate (to -> from) if that's what was actually recorded —
 // a person is likely to only ever enter one direction of a pair.
+//
+// USD-bridge fallback: if neither a direct nor inverse rate exists for
+// the requested pair, but the destination has USD rates for BOTH
+// currencies on file (e.g. USD->LKR and USD->INR), derive LKR->INR as
+// (1 / rate(USD,LKR)) * rate(USD,INR) — the "1 USD = X INR, 1 USD = Y
+// LKR" mental model, applied automatically so the person only ever has
+// to enter rates against USD, never every pair. This is still a pure,
+// read-time derivation: it never writes anything, and a research
+// record's own stored amount/currency is completely untouched by it,
+// same as every other path through this function.
 export async function getExchangeRate(from, to) {
   if (from === to) return 1;
   const direct = await getOne(RATES_STORE, pairKey(from, to));
   if (direct) return direct.rate;
   const inverse = await getOne(RATES_STORE, pairKey(to, from));
   if (inverse && inverse.rate) return 1 / inverse.rate;
+
+  if (from !== 'USD' && to !== 'USD') {
+    const usdToFrom = await getExchangeRate('USD', from);
+    const usdToTo = await getExchangeRate('USD', to);
+    if (usdToFrom && usdToTo) return usdToTo / usdToFrom;
+  }
+
   return null;
 }
 

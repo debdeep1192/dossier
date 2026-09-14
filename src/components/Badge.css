@@ -15,6 +15,14 @@
 .badge--priority-optional { background: #FBF3DE; color: var(--color-saffron-dark); }
 .badge--priority-reference { background: var(--color-neutral-200); color: var(--color-text-secondary); }
 
+.badge--visit-priority-must_see { background: #FBEBE6; color: var(--color-coral-dark); }
+.badge--visit-priority-maybe { background: #FBF3DE; color: var(--color-saffron-dark); }
+.badge--visit-priority-skippable { background: var(--color-neutral-200); color: var(--color-text-secondary); }
+
+.badge--price-tier-budget { background: #E4F2EF; color: var(--color-teal-dark); }
+.badge--price-tier-regular { background: var(--color-neutral-200); color: var(--color-text-secondary); }
+.badge--price-tier-fine_dining { background: #FBF3DE; color: var(--color-saffron-dark); }
+
 .badge--section {
   background: var(--color-neutral-200);
   color: var(--color-text-secondary);

@@ -1,21 +1,24 @@
 import { useState, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
+import { useAutoOpenNewForm } from '../hooks/useAutoOpenNewForm';
 import { getDestination } from '../db/stores/destinations';
 import { listShoppingItems, createShoppingItem, updateShoppingItem, deleteShoppingItem, emptyShoppingItem } from '../db/stores/shoppingItems';
-import { listShopsForItem, createShop, deleteShop, emptyShop } from '../db/stores/shops';
+import { listShopsForItem, createShop, deleteShop, emptyShop, normalizeShop } from '../db/stores/shops';
 import { useCachedQuery, invalidateCachedQuery, invalidateCachedQueryPrefix } from '../hooks/useCachedQuery';
 import SectionPageLayout from '../components/SectionPageLayout';
 import Card from '../components/Card';
 import Button from '../components/Button';
 import Modal from '../components/Modal';
-import { Input, TextArea, Select } from '../components/Field';
-import { PriorityBadge } from '../components/Badge';
+import { Input, TextArea } from '../components/Field';
 import { PlaceField, PlaceSummary } from '../components/Place';
+import { OpeningHoursField } from '../components/OpeningHours';
+import { formatOpeningHours } from '../lib/openingHours.js';
 import { EmptyState, LoadingState, ErrorState } from '../components/States';
 
 export default function ShoppingPage() {
   const { destinationId } = useParams();
   const [editingItem, setEditingItem] = useState(null);
+  useAutoOpenNewForm(setEditingItem);
   const [expandedItemId, setExpandedItemId] = useState(null);
   const [addingShopFor, setAddingShopFor] = useState(null);
 
@@ -84,7 +87,8 @@ export default function ShoppingPage() {
 }
 
 function ShoppingItemCard({ item, expanded, onToggleExpand, onEdit, onDelete, onAddShop, afterShopMutation }) {
-  const { data: shops, refresh: refreshShops } = useCachedQuery(expanded ? `shops:${item.id}` : null, useCallback(() => listShopsForItem(item.id), [item.id]));
+  const { data: rawShops, refresh: refreshShops } = useCachedQuery(expanded ? `shops:${item.id}` : null, useCallback(() => listShopsForItem(item.id), [item.id]));
+  const shops = rawShops ? rawShops.map(normalizeShop) : rawShops;
 
   async function handleDeleteShop(shop) {
     if (!window.confirm(`Remove "${shop.place?.name}"?`)) return;
@@ -99,7 +103,6 @@ function ShoppingItemCard({ item, expanded, onToggleExpand, onEdit, onDelete, on
       <div className="entry-card__main" onClick={onToggleExpand} style={{ cursor: 'pointer' }}>
         <div className="entry-card__title-line">
           <span className="entry-card__title">{item.name}</span>
-          <PriorityBadge priority={item.priority} />
         </div>
         {item.notes && <p className="entry-card__meta">{item.notes}</p>}
         <p className="entry-card__meta">{expanded ? '▾' : '▸'} {shops ? `${shops.length} shop${shops.length === 1 ? '' : 's'}` : 'Tap to see shops'}</p>
@@ -114,8 +117,8 @@ function ShoppingItemCard({ item, expanded, onToggleExpand, onEdit, onDelete, on
           {shops && shops.length > 0 && shops.map(shop => (
             <div key={shop.id} className="shopping-item-card__shop-row">
               <PlaceSummary place={shop.place} />
-              {shop.openingHours && <span className="entry-card__meta">{shop.openingHours}</span>}
-              <PriorityBadge priority={shop.priority} />
+              {formatOpeningHours(shop.openingHours) && <span className="entry-card__meta">{formatOpeningHours(shop.openingHours)}</span>}
+              {!formatOpeningHours(shop.openingHours) && shop.openingHoursLegacyText && <span className="entry-card__meta">{shop.openingHoursLegacyText}</span>}
               <button type="button" className="entry-card__delete" onClick={() => handleDeleteShop(shop)}>Remove</button>
             </div>
           ))}
@@ -130,7 +133,6 @@ function ShoppingItemForm({ destinationId, record, onClose, onSaved }) {
   const base = record || emptyShoppingItem();
   const [name, setName] = useState(base.name || '');
   const [notes, setNotes] = useState(base.notes || '');
-  const [priority, setPriority] = useState(base.priority || '');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -140,7 +142,7 @@ function ShoppingItemForm({ destinationId, record, onClose, onSaved }) {
     setError('');
     setSubmitting(true);
     try {
-      const fields = { name: name.trim(), notes, priority: priority || null };
+      const fields = { name: name.trim(), notes };
       if (record) await updateShoppingItem(record.id, fields);
       else await createShoppingItem(destinationId, fields);
       onSaved();
@@ -156,13 +158,6 @@ function ShoppingItemForm({ destinationId, record, onClose, onSaved }) {
       <form onSubmit={handleSubmit}>
         <Input label="What to buy" required autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Darjeeling loose-leaf muscatel tea" />
         <TextArea label="Notes" value={notes} onChange={e => setNotes(e.target.value)} rows={2} />
-        <Select label="Priority" value={priority} onChange={e => setPriority(e.target.value)}>
-          <option value="">No priority set</option>
-          <option value="must_know">Must Know</option>
-          <option value="useful">Useful</option>
-          <option value="optional">Optional</option>
-          <option value="reference">Reference</option>
-        </Select>
         {error && <p className="form-error" role="alert">{error}</p>}
         <Button type="submit" fullWidth disabled={submitting}>{submitting ? 'Saving…' : 'Save'}</Button>
       </form>
@@ -173,10 +168,9 @@ function ShoppingItemForm({ destinationId, record, onClose, onSaved }) {
 function ShopForm({ destinationId, shoppingItemId, onClose, onSaved }) {
   const base = emptyShop();
   const [place, setPlace] = useState(base.place);
-  const [openingHours, setOpeningHours] = useState('');
+  const [openingHours, setOpeningHours] = useState(base.openingHours);
   const [priceInfo, setPriceInfo] = useState('');
   const [notes, setNotes] = useState('');
-  const [priority, setPriority] = useState(base.priority || '');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -186,7 +180,7 @@ function ShopForm({ destinationId, shoppingItemId, onClose, onSaved }) {
     setError('');
     setSubmitting(true);
     try {
-      await createShop(destinationId, { shoppingItemId, place, openingHours, priceInfo, notes, priority: priority || null });
+      await createShop(destinationId, { shoppingItemId, place, openingHours, priceInfo, notes });
       onSaved();
     } catch (err) {
       setError(err.message);
@@ -199,16 +193,9 @@ function ShopForm({ destinationId, shoppingItemId, onClose, onSaved }) {
     <Modal open onClose={onClose} title="New Shop">
       <form onSubmit={handleSubmit}>
         <PlaceField value={place} onChange={setPlace} label="Shop" />
-        <Input label="Opening hours" value={openingHours} onChange={e => setOpeningHours(e.target.value)} placeholder="e.g. 10 AM – 8 PM" />
+        <OpeningHoursField value={openingHours} onChange={setOpeningHours} />
         <Input label="Price info (optional)" value={priceInfo} onChange={e => setPriceInfo(e.target.value)} placeholder="e.g. ₹400-600 per 100g" />
         <TextArea label="Notes" value={notes} onChange={e => setNotes(e.target.value)} rows={2} />
-        <Select label="Priority" value={priority} onChange={e => setPriority(e.target.value)}>
-          <option value="">No priority set</option>
-          <option value="must_know">Must Know</option>
-          <option value="useful">Useful</option>
-          <option value="optional">Optional</option>
-          <option value="reference">Reference</option>
-        </Select>
         {error && <p className="form-error" role="alert">{error}</p>}
         <Button type="submit" fullWidth disabled={submitting}>{submitting ? 'Saving…' : 'Save'}</Button>
       </form>

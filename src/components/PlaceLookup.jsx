@@ -51,11 +51,11 @@ export default function PlaceLookup({ name, locationName, destinationName, expec
 
   function handleSelect(candidate) {
     const place = candidate.cached ? candidate.place : {
-      name: candidate.raw.name || candidate.raw.display_name.split(',')[0],
-      locality: candidate.raw.address?.suburb || candidate.raw.address?.neighbourhood || '',
-      city: candidate.raw.address?.city || candidate.raw.address?.town || candidate.raw.address?.village || '',
-      lat: parseFloat(candidate.raw.lat),
-      lng: parseFloat(candidate.raw.lon),
+      name: candidate.name,
+      locality: candidate.raw?.address?.suburb || candidate.raw?.address?.neighbourhood || '',
+      city: candidate.addressCity || candidate.raw?.address?.city || candidate.raw?.address?.town || candidate.raw?.address?.village || '',
+      lat: candidate.lat,
+      lng: candidate.lng,
     };
     setCachedConfirmedResult({ name, locationName, destinationName }, place);
     onConfirm(place);
@@ -90,8 +90,8 @@ export default function PlaceLookup({ name, locationName, destinationName, expec
           </p>
           {candidates.map((c, i) => (
             <button key={i} type="button" className="place-lookup__candidate" onClick={() => handleSelect(c)}>
-              <span className="place-lookup__candidate-name">{c.cached ? c.place.name : (c.raw.name || c.raw.display_name.split(',')[0])}</span>
-              <span className="place-lookup__candidate-address">{c.cached ? [c.place.locality, c.place.city].filter(Boolean).join(', ') : c.raw.display_name}</span>
+              <span className="place-lookup__candidate-name">{c.cached ? c.place.name : c.name}</span>
+              <span className="place-lookup__candidate-address">{c.cached ? [c.place.locality, c.place.city].filter(Boolean).join(', ') : c.displayName}</span>
             </button>
           ))}
           <button type="button" className="place-lookup__none" onClick={handleNoneOfThese}>None of these / keep my manual entry</button>

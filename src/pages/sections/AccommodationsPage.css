@@ -1,0 +1,27 @@
+.accommodation-form__amenities {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-1) var(--space-3);
+}
+@media (min-width: 480px) {
+  .accommodation-form__amenities { grid-template-columns: 1fr 1fr 1fr; }
+}
+
+.accommodation-form__extra-charge-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+.accommodation-form__extra-charge-row > *:first-child { flex: 1; }
+.accommodation-form__extra-charge-row .money-field { flex: 1.5; }
+
+.accommodation-form__remove-charge {
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  padding: var(--space-2) 0;
+}
+.accommodation-form__remove-charge:hover { color: var(--color-text-primary); }

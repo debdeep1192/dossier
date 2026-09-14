@@ -51,6 +51,134 @@
   color: var(--color-text-muted);
 }
 
+/* ---- Tabs (Chunk 10) ---- */
+.dest-detail__tabs {
+  display: flex;
+  gap: var(--space-1);
+  border-bottom: 1px solid var(--color-border);
+  margin-bottom: var(--space-4);
+}
+
+.dest-detail__tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+.dest-detail__tab--active {
+  color: var(--color-teal-dark);
+  border-bottom-color: var(--color-teal);
+}
+
+/* ---- Cities tab ---- */
+.cities-tab__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+@media (min-width: 640px) {
+  .cities-tab__grid { grid-template-columns: repeat(3, 1fr); }
+}
+
+.city-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: 96px;
+  text-align: center;
+}
+
+.city-card__name {
+  font-size: var(--text-lg);
+  font-weight: 700;
+}
+
+.city-card__actions {
+  display: flex;
+  gap: var(--space-2);
+}
+.city-card__actions button {
+  background: none;
+  border: none;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+.city-card__actions button:hover { color: var(--color-text-primary); }
+
+.city-card__rename-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  width: 100%;
+}
+.city-card__rename-row .field { flex: 1; margin-bottom: 0; }
+.city-card__rename-row button {
+  background: var(--color-teal);
+  color: white;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.cities-tab__destination-wide-link {
+  display: block;
+  background: none;
+  border: none;
+  color: var(--color-teal-dark);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+  padding: var(--space-2) 0;
+  margin-bottom: var(--space-4);
+}
+
+.cities-tab__manage { margin-top: var(--space-2); }
+
+/* ---- Research tab ---- */
+.research-tab__filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.research-tab__scope-hint {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  margin-bottom: var(--space-3);
+}
+
+/* ---- Secondary "More" row: General Notes + Import from Text
+   (Phase 3 Chunk 13) — both fully functional, deliberately less
+   prominent than the main research categories above. ---- */
+.research-tab__more {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  margin-top: var(--space-5);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border);
+}
+
+.research-tab__more-link {
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  padding: var(--space-1) 0;
+}
+.research-tab__more-link:hover { color: var(--color-text-secondary); }
+
 /* ---- Locations panel ---- */
 .locations-panel {
   margin-bottom: var(--space-5);

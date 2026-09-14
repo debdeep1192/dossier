@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
+import { useAutoOpenNewForm } from '../../hooks/useAutoOpenNewForm';
 import { getDestination } from '../../db/stores/destinations';
 import { listAttractions, createAttraction, updateAttraction, deleteAttraction, emptyAttraction, normalizeAttraction } from '../../db/stores/attractions';
 import { listLocations, describeLocationContext } from '../../db/stores/locations';
@@ -11,7 +12,7 @@ import Card from '../../components/Card';
 import Button from '../../components/Button';
 import Modal from '../../components/Modal';
 import { Input, TextArea, Select } from '../../components/Field';
-import { PriorityBadge } from '../../components/Badge';
+import { VisitPriorityBadge } from '../../components/Badge';
 import { PlaceField, PlaceSummary } from '../../components/Place';
 import { MoneyField } from '../../components/Money';
 import { FeeBandsField } from '../../components/FeeBands';
@@ -24,7 +25,7 @@ import Disclosure from '../../components/Disclosure';
 import { hasAdvancedContent } from '../../lib/formHelpers.js';
 import { isMoneyEmpty } from '../../db/shared.js';
 import LocationScopeField from '../../components/LocationScopeField';
-import JourneyField from '../../components/JourneyField';
+import RouteField from '../../components/RouteField';
 import OtherSelect from '../../components/OtherSelect';
 import { CATEGORY_HINTS } from '../../lib/placeLookup.js';
 
@@ -33,6 +34,7 @@ export default function AttractionsPage() {
   const [searchParams] = useSearchParams();
   const contextLocationId = searchParams.get('location') || null;
   const [editing, setEditing] = useState(null);
+  useAutoOpenNewForm(setEditing);
 
   const fetcher = useCallback(async () => {
     const [destination, rawItems, locations, journeys] = await Promise.all([
@@ -82,7 +84,7 @@ export default function AttractionsPage() {
             <div className="entry-card__main">
               <div className="entry-card__title-line">
                 <PlaceSummary place={item.place} destinationName={destination.name} />
-                <PriorityBadge priority={item.priority} />
+                <VisitPriorityBadge visitPriority={item.visitPriority} />
               </div>
               {!contextLocationId && locations.length > 0 && <p className="entry-card__meta">{describeLocationContext(item.locationId, locations)}</p>}
               {item.journeyId && <p className="entry-card__meta">{describeJourney(journeys.find(j => j.id === item.journeyId), locations)}</p>}
@@ -150,7 +152,7 @@ function AttractionForm({ destinationId, destinationName, record, currencies, de
   const [typicallySpent, setTypicallySpent] = useState(base.typicallySpent || '');
   const [bestTimeOption, setBestTimeOption] = useState(base.bestTimeOfDay?.option || '');
   const [bestTimeNote, setBestTimeNote] = useState(base.bestTimeOfDay?.note || '');
-  const [priority, setPriority] = useState(base.priority || '');
+  const [visitPriority, setVisitPriority] = useState(base.visitPriority || '');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -178,7 +180,7 @@ function AttractionForm({ destinationId, destinationName, record, currencies, de
         feeBands, cameraCharge: hasCameraCharge ? cameraCharge : null, videographyCharge: hasVideographyCharge ? videographyCharge : null,
         openingHours, typicallySpent,
         bestTimeOfDay: { option: bestTimeOption, note: bestTimeNote },
-        priority: priority || null,
+        visitPriority: visitPriority || null,
       };
       if (record) await updateAttraction(record.id, fields);
       else await createAttraction(destinationId, fields);
@@ -201,17 +203,16 @@ function AttractionForm({ destinationId, destinationName, record, currencies, de
           expectedCategory={CATEGORY_HINTS.attraction}
         />
         <LocationScopeField locations={locations} value={locationId} onChange={setLocationId} lockedLocationId={record ? null : contextLocationId} />
-        <JourneyField journeys={localJourneys} locations={locations} destinationId={destinationId} value={journeyId} onChange={setJourneyId} onJourneyCreated={refreshJourneys} />
+        <RouteField journeys={localJourneys} locations={locations} destinationId={destinationId} value={journeyId} onChange={setJourneyId} onJourneyCreated={refreshJourneys} />
         <OtherSelect label="Category" value={category} otherValue={categoryOther} onChange={setCategory} onOtherChange={setCategoryOther} options={ATTRACTION_CATEGORIES} />
         <TextArea label="Notes" value={description} onChange={e => setDescription(e.target.value)} rows={3} placeholder="What's worth remembering about this place?" />
         <Input label="Typically spent" value={typicallySpent} onChange={e => setTypicallySpent(e.target.value)} placeholder="e.g. 1-2 hours" hint="How long visitors normally spend here." />
         <OtherSelect label="Best time of day" value={bestTimeOption} otherValue={bestTimeNote} onChange={setBestTimeOption} onOtherChange={setBestTimeNote} options={BEST_TIME_OF_DAY_OPTIONS} placeholder="Not specified" />
-        <Select label="Priority" value={priority} onChange={e => setPriority(e.target.value)}>
-          <option value="">No priority set</option>
-          <option value="must_know">Must Know</option>
-          <option value="useful">Useful</option>
-          <option value="optional">Optional</option>
-          <option value="reference">Reference</option>
+        <Select label="How important is this to see?" value={visitPriority} onChange={e => setVisitPriority(e.target.value)}>
+          <option value="">Not set</option>
+          <option value="must_see">Must see</option>
+          <option value="maybe">Maybe</option>
+          <option value="skippable">Skippable</option>
         </Select>
 
         <Disclosure label="Fees & opening hours" defaultOpen={advancedHasContent}>

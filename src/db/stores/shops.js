@@ -1,11 +1,16 @@
 import { commonMetadata, emptyPlace } from '../shared.js';
 import { getAll } from '../connection.js';
 import { listActive, getActive, save, patch, softDelete } from './crud.js';
+import { emptyOpeningHours } from '../../lib/openingHours.js';
 
 const STORE = 'shops';
 
+// openingHours uses the same structured day/range model Attractions
+// already uses (lib/openingHours.js) — reused, not a new concept, per
+// Phase 3 Chunk 4. Earlier shops stored a plain free-text string here;
+// see normalizeShop() below for how that's preserved, not discarded.
 export function emptyShop() {
-  return { shoppingItemId: null, place: emptyPlace(), openingHours: '', notes: '', priceInfo: '' };
+  return { shoppingItemId: null, place: emptyPlace(), openingHours: emptyOpeningHours(), openingHoursLegacyText: '', notes: '', priceInfo: '' };
 }
 
 export function listShopsForItem(shoppingItemId) {
@@ -33,4 +38,22 @@ export function updateShop(id, fields) {
 
 export function deleteShop(id) {
   return softDelete(STORE, id);
+}
+
+// Backward compatibility: a shop saved before openingHours became a
+// structured group array had it as a plain string (e.g. "10am-8pm").
+// That string is preserved verbatim in openingHoursLegacyText for
+// display, rather than lost or forced into the new structure — the
+// person can still see it, and can optionally re-enter it in the
+// structured picker next time they edit.
+export function normalizeShop(record) {
+  if (!record) return record;
+  if (typeof record.openingHours === 'string') {
+    return {
+      ...record,
+      openingHoursLegacyText: record.openingHours,
+      openingHours: emptyOpeningHours(),
+    };
+  }
+  return record;
 }

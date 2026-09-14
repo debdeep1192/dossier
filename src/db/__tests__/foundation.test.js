@@ -10,24 +10,26 @@ import assert from 'node:assert/strict';
 import { __resetDbForTest } from '../connection.js';
 import { createDestination, deleteDestination, getDestination } from '../stores/destinations.js';
 import { createAttraction, listAttractions, updateAttraction, deleteAttraction, getAttraction } from '../stores/attractions.js';
-import { createRestaurantEntry, isPlaceBased } from '../stores/restaurants.js';
+import { createRestaurantEntry, isPlaceBased, updateRestaurantEntry } from '../stores/restaurants.js';
 import { createTransportEntry, listTransportEntries } from '../stores/transport.js';
 import { createCostEntry, getCostEntry } from '../stores/costs.js';
 import { createIntake, getIntake, updateCandidate, acceptCandidate, rejectCandidate, resetCandidateToPending } from '../stores/intake.js';
 import { extractCandidates, extractPriceFromText } from '../extraction.js';
 import { buildGoogleMapsUrl } from '../../lib/googleMaps.js';
 import { reconstructLines, stripRepeatedPageBoilerplate } from '../../lib/pdfText.js';
-import { createAccommodation, getAccommodation } from '../stores/accommodations.js';
-import { createWeatherNote, normalizeWeatherNote } from '../stores/weatherNotes.js';
+import { createAccommodation, getAccommodation, updateAccommodation, normalizeAccommodation, ACCOMMODATION_AMENITIES } from '../stores/accommodations.js';
+import { createWeatherNote, normalizeWeatherNote, getWeatherNote } from '../stores/weatherNotes.js';
+import { defaultDateRangeForMonths } from '../../lib/weatherOptions.js';
 import { emptyFeeBand, formatFeeBands } from '../../lib/feeBands.js';
 import { formatOpeningHours } from '../../lib/openingHours.js';
 import { CORE_CURRENCIES, getCurrencyOptions, addDestinationCurrency, setExchangeRate, getExchangeRate, convertAmount } from '../currency.js';
 import { createShoppingItem } from '../stores/shoppingItems.js';
+import { createShop, normalizeShop } from '../stores/shops.js';
 import { createLocation, listLocations, updateLocation, deleteLocation, getLocation } from '../stores/locations.js';
-import { createPracticalInfoEntry, listPracticalInfoEntries } from '../stores/practicalInfo.js';
+import { createPracticalInfoEntry, listPracticalInfoEntries, updatePracticalInfoEntry, deletePracticalInfoEntry } from '../stores/practicalInfo.js';
 import { createJourney, listJourneys, updateJourney, deleteJourney, getJourney, listJourneysUsingLocation, retireJourneysUsingLocation, describeJourney } from '../stores/journeys.js';
 import { createDish, listDishes, updateDish, deleteDish, getDish, linkDishToRestaurant, unlinkDishFromRestaurant, listDishesForRestaurant } from '../stores/dishes.js';
-import { normalizeTransportEntry } from '../stores/transport.js';
+import { normalizeTransportEntry, updateTransportEntry } from '../stores/transport.js';
 import { getDestinationDefaultCurrency, setDestinationDefaultCurrency } from '../currency.js';
 
 let passed = 0, failed = 0;
@@ -706,9 +708,198 @@ await test('an inverse rate can be derived when only one direction was recorded'
   assert.ok(Math.abs(inverse - (1 / 84)) < 0.0001);
 });
 
+await test('a cross-currency rate can be derived through USD when both legs are on file (Phase 3 Chunk 2)', async () => {
+  await setExchangeRate('USD', 'LKR', 305);
+  await setExchangeRate('USD', 'KGS', 87);
+  const rate = await getExchangeRate('LKR', 'KGS');
+  // 1 USD = 305 LKR, 1 USD = 87 KGS -> 1 LKR = 87/305 KGS
+  assert.ok(Math.abs(rate - (87 / 305)) < 0.0001, `expected ~${87 / 305}, got ${rate}`);
+});
+
+await test('the USD-bridge derivation still returns null when one of the two legs is missing', async () => {
+  const result = await getExchangeRate('LKR', 'MYR'); // MYR never set in this test run
+  assert.equal(result, null);
+});
+
+await test('a direct rate always takes priority over the USD-bridge derivation, even if both exist', async () => {
+  await setExchangeRate('USD', 'THB', 36);
+  await setExchangeRate('USD', 'PHP', 56);
+  await setExchangeRate('THB', 'PHP', 1.75); // a direct rate the person entered themselves
+  const rate = await getExchangeRate('THB', 'PHP');
+  assert.equal(rate, 1.75, 'a directly-recorded rate must win over the derived USD-bridge value');
+});
+
+await test('the USD-bridge derivation never touches any stored research record, exactly like direct/inverse rates', async () => {
+  const dest = await createDestination({ name: 'Kyrgyzstan' });
+  await setExchangeRate('USD', 'LKR', 305);
+  await setExchangeRate('USD', 'KGS', 87);
+  const item = await createAttraction(dest.id, { place: { name: 'Ala-Too Square' }, feeBands: [{ id: crypto.randomUUID(), label: '', minAge: '', maxAge: '', status: 'paid', amount: 500, currency: 'LKR' }] });
+  await getExchangeRate('LKR', 'KGS'); // trigger the bridge derivation
+  const reloaded = await getAttraction(item.id);
+  assert.equal(reloaded.feeBands[0].amount, 500);
+  assert.equal(reloaded.feeBands[0].currency, 'LKR', 'a cross-currency derivation must never rewrite a stored fee\'s original amount/currency');
+});
+
 await test('convertAmount returns null (never a guess) when no rate is on file', async () => {
   const result = await convertAmount(100, 'VND', 'USD');
   assert.equal(result, null);
+});
+
+console.log('\n13b. Weather — exact editable date ranges (Phase 3 Chunk 3)');
+await test('a weather note can be created with exact start/end dates alongside the existing free-text period', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const note = await createWeatherNote(dest.id, { period: 'Safari season', startDate: '2001-07-01', endDate: '2001-09-15' });
+  assert.equal(note.startDate, '2001-07-01');
+  assert.equal(note.endDate, '2001-09-15');
+  assert.equal(note.period, 'Safari season', 'period remains the required, always-present field');
+});
+
+await test('a weather note with no dates set defaults to empty strings, not required', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const note = await createWeatherNote(dest.id, { period: 'December' });
+  assert.equal(note.startDate, '');
+  assert.equal(note.endDate, '');
+});
+
+await test('a weather note saved before startDate/endDate existed remains fully readable', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const note = await createWeatherNote(dest.id, { period: 'Old note, period only' });
+  delete note.startDate;
+  delete note.endDate;
+  assert.equal(note.period, 'Old note, period only', 'a legacy record with no date keys at all remains valid and readable');
+});
+
+await test('defaultDateRangeForMonths produces the 1st of the start month through the last day of the end month', () => {
+  const { startDate, endDate } = defaultDateRangeForMonths('July', 'September');
+  assert.equal(startDate, '2001-07-01');
+  assert.equal(endDate, '2001-09-30', 'September has 30 days');
+});
+
+await test('defaultDateRangeForMonths handles a single month (start === end) correctly, including February', () => {
+  const single = defaultDateRangeForMonths('December', 'December');
+  assert.equal(single.startDate, '2001-12-01');
+  assert.equal(single.endDate, '2001-12-31');
+  const feb = defaultDateRangeForMonths('February', 'February');
+  assert.equal(feb.endDate, '2001-02-28', 'the reference year (2001) is a non-leap year, so February has 28 days');
+});
+
+await test('defaultDateRangeForMonths returns empty strings for an unrecognized month name rather than throwing', () => {
+  const result = defaultDateRangeForMonths('Not a real month', 'July');
+  assert.deepEqual(result, { startDate: '', endDate: '' });
+});
+
+await test('editing an existing weather note\'s dates does not require re-entering the period', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const note = await createWeatherNote(dest.id, { period: 'Dry season' });
+  const updated = await getWeatherNote(note.id);
+  updated.startDate = '2001-06-01';
+  updated.endDate = '2001-08-31';
+  const reSaved = await createWeatherNote(dest.id, { period: updated.period, startDate: updated.startDate, endDate: updated.endDate });
+  assert.equal(reSaved.period, 'Dry season');
+  assert.equal(reSaved.startDate, '2001-06-01');
+});
+
+console.log('\n13c. Shopping — structured opening hours reusing the existing Attractions model (Phase 3 Chunk 4)');
+await test('a shop can be created with structured opening hours (the same model Attractions uses)', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const item = await createShoppingItem(dest.id, { name: 'Loose-leaf tea' });
+  const hours = [{ id: crypto.randomUUID(), days: ['daily'], ranges: [{ start: '10:00', end: '19:00' }] }];
+  const shop = await createShop(dest.id, { shoppingItemId: item.id, place: { name: 'Nathmulls' }, openingHours: hours });
+  assert.deepEqual(shop.openingHours, hours);
+  assert.equal(formatOpeningHours(shop.openingHours), 'Daily: 10:00–19:00');
+});
+
+await test('a shop with no opening hours set defaults to the standard empty structure, not a blank string', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const item = await createShoppingItem(dest.id, { name: 'Tea' });
+  const shop = await createShop(dest.id, { shoppingItemId: item.id, place: { name: 'Some Shop' } });
+  assert.equal(formatOpeningHours(shop.openingHours), null, 'an unfilled structure formats as "no hours set", same as Attractions');
+});
+
+await test('a shop saved before opening hours were structured (a plain string) is preserved and surfaced, not lost', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const item = await createShoppingItem(dest.id, { name: 'Tea' });
+  const shop = await createShop(dest.id, { shoppingItemId: item.id, place: { name: 'Old Shop' } });
+  // Simulate a genuinely pre-Chunk-4 record: openingHours was a plain string.
+  shop.openingHours = '10am-8pm daily';
+  const normalized = normalizeShop(shop);
+  assert.equal(normalized.openingHoursLegacyText, '10am-8pm daily', 'the old free-text value is preserved, not discarded');
+  assert.equal(formatOpeningHours(normalized.openingHours), null, 'openingHours itself becomes an empty structure so the field never crashes structured-hours UI');
+  assert.equal(normalized.openingHours.length, 1);
+  assert.deepEqual(normalized.openingHours[0].days, ['daily']);
+});
+
+await test('normalizeShop leaves an already-structured shop record untouched', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const item = await createShoppingItem(dest.id, { name: 'Tea' });
+  const hours = [{ id: crypto.randomUUID(), days: ['mon', 'tue'], ranges: [{ start: '09:00', end: '17:00' }] }];
+  const shop = await createShop(dest.id, { shoppingItemId: item.id, place: { name: 'New Shop' }, openingHours: hours });
+  const normalized = normalizeShop(shop);
+  assert.deepEqual(normalized.openingHours, hours);
+  assert.equal(normalized.openingHoursLegacyText, '');
+});
+
+console.log('\n13d. Accommodation — fixed amenities checklist and extra-person charges (Phase 3 Chunk 5)');
+await test('an accommodation can be created with a subset of the fixed amenities list', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const hotel = await createAccommodation(dest.id, { place: { name: 'Cinnamon Grand' }, amenities: ['Great location', 'Swimming pool', 'Breakfast included'] });
+  assert.deepEqual(hotel.amenities, ['Great location', 'Swimming pool', 'Breakfast included']);
+});
+
+await test('the fixed amenities list matches the exact approved set, no more and no less', () => {
+  assert.deepEqual(ACCOMMODATION_AMENITIES, [
+    'Great location', 'Near attractions', 'Near public transport', 'Airport transfer',
+    'Pickup/drop facility', 'Air conditioning', 'Breakfast included', 'Swimming pool', 'Parking',
+  ]);
+});
+
+await test('an accommodation with no amenities selected defaults to an empty array, not undefined', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const hotel = await createAccommodation(dest.id, { place: { name: 'Basic Guesthouse' } });
+  assert.deepEqual(hotel.amenities, []);
+});
+
+await test('extra-person charges are stored as structured { label, price } entries, each with its own currency preserved independently', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const hotel = await createAccommodation(dest.id, {
+    place: { name: 'Family Resort' },
+    price: { amount: 6000, currency: 'INR', unit: 'per night', note: '' },
+    extraPersonCharges: [
+      { label: 'Extra adult', price: { amount: 1500, currency: 'INR', unit: 'per night', note: '' } },
+      { label: 'Extra child', price: { amount: 750, currency: 'INR', unit: 'per night', note: '' } },
+    ],
+  });
+  assert.equal(hotel.extraPersonCharges.length, 2);
+  assert.equal(hotel.extraPersonCharges[0].label, 'Extra adult');
+  assert.equal(hotel.extraPersonCharges[0].price.amount, 1500);
+  assert.equal(hotel.extraPersonCharges[1].label, 'Extra child');
+  assert.equal(hotel.extraPersonCharges[1].price.amount, 750);
+});
+
+await test('an accommodation with no extra-person charges defaults to an empty array', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const hotel = await createAccommodation(dest.id, { place: { name: 'Simple Room' } });
+  assert.deepEqual(hotel.extraPersonCharges, []);
+});
+
+await test('an accommodation saved before amenities/extraPersonCharges existed remains fully readable, and normalizeAccommodation fills in safe defaults without altering anything else', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const hotel = await createAccommodation(dest.id, { place: { name: 'Old Hotel' }, price: { amount: 5000, currency: 'INR', unit: 'per night', note: '' } });
+  // Simulate a genuinely pre-Chunk-5 record.
+  delete hotel.amenities;
+  delete hotel.extraPersonCharges;
+  const normalized = normalizeAccommodation(hotel);
+  assert.deepEqual(normalized.amenities, []);
+  assert.deepEqual(normalized.extraPersonCharges, []);
+  assert.equal(normalized.place.name, 'Old Hotel', 'unrelated fields are completely untouched by normalization');
+  assert.equal(normalized.price.amount, 5000);
+});
+
+await test('a legacy accommodation record with a stored priority value keeps it in storage even though the form no longer shows or sets it (confirmed again for this chunk)', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const hotel = await createAccommodation(dest.id, { place: { name: 'Legacy Priority Hotel' }, priority: 'useful' });
+  const updated = await updateAccommodation(hotel.id, { amenities: ['Parking'] });
+  assert.equal(updated.priority, 'useful', 'adding amenities to a legacy record must never clear its old priority value');
 });
 
 console.log('\n14. Database version upgrade (v1 -> v2) preserves existing data');
@@ -1100,6 +1291,22 @@ await test('a brand-new restaurant record defaults to place: null (the approved,
   assert.equal(entry.place, null, 'emptyRestaurantEntry() defaults place to null, not emptyPlace() — the unapproved change was reverted');
 });
 
+await test('a legacy mustTryDishes value on a restaurant survives being updated via the Chunk 11 combined form (which no longer sets that field)', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  // Simulate a restaurant saved before Chunk 11, when the active form
+  // still wrote mustTryDishes.
+  const restaurant = await createRestaurantEntry(dest.id, { place: { name: 'Kunga Restaurant' }, mustTryDishes: ['Momo', 'Fried Rice'] });
+  assert.deepEqual(restaurant.mustTryDishes, ['Momo', 'Fried Rice']);
+
+  // The new combined RestaurantForm's handleSubmit builds its `fields`
+  // object WITHOUT a mustTryDishes key at all (see RestaurantsPage.jsx)
+  // — confirm that updating other fields this way never clears it.
+  const updated = await updateRestaurantEntry(restaurant.id, { cuisine: 'Tibetan', priceTier: 'regular' });
+  assert.deepEqual(updated.mustTryDishes, ['Momo', 'Fried Rice'], 'editing a restaurant through the Chunk 11 form must never silently discard its legacy mustTryDishes note');
+  assert.equal(updated.cuisine, 'Tibetan');
+  assert.equal(updated.priceTier, 'regular');
+});
+
 console.log('\n18b. Import pipeline: Costs cannot be produced; Dishes can complete the full path');
 await test('extracting candidates from realistic cost-flavoured text never proposes the costs section (Costs is not in SECTION_KEYWORDS)', async () => {
   const dest = await createDestination({ name: 'Sri Lanka' });
@@ -1267,6 +1474,73 @@ await test('a new transport price defaults to the destination\'s currency defaul
   assert.equal(entry.price.currency, 'INR', 'a price explicitly entered with its own currency is stored exactly as given, regardless of the destination default');
 });
 
+console.log('\n20c. Transport — real fromLocationId/toLocationId endpoint references (Phase 3 Chunk 6)');
+await test('an inter-city transport record can reference two real, distinct locations via fromLocationId/toLocationId', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const colombo = await createLocation(dest.id, { name: 'Colombo' });
+  const kandy = await createLocation(dest.id, { name: 'Kandy' });
+  const entry = await createTransportEntry(dest.id, {
+    travelType: 'inter_city',
+    from: { label: 'Colombo' }, to: { label: 'Kandy' },
+    fromLocationId: colombo.id, toLocationId: kandy.id,
+  });
+  assert.equal(entry.fromLocationId, colombo.id);
+  assert.equal(entry.toLocationId, kandy.id);
+  assert.equal(entry.from.label, 'Colombo', 'the display label is still populated alongside the real location reference');
+});
+
+await test('fromLocationId/toLocationId default to null when not provided, never forced or guessed from the label', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const entry = await createTransportEntry(dest.id, { from: { label: 'Colombo' }, to: { label: 'Kandy' } });
+  assert.equal(entry.fromLocationId, null);
+  assert.equal(entry.toLocationId, null);
+});
+
+await test('a transport record saved before fromLocationId/toLocationId existed remains fully readable, and normalizeTransportEntry fills in null defaults without altering the legacy labels', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const entry = await createTransportEntry(dest.id, { from: { label: 'Colombo' }, to: { label: 'Kandy' } });
+  delete entry.fromLocationId;
+  delete entry.toLocationId;
+  const normalized = normalizeTransportEntry(entry);
+  assert.equal(normalized.fromLocationId, null);
+  assert.equal(normalized.toLocationId, null);
+  assert.equal(normalized.from.label, 'Colombo', 'the legacy free-text label is completely untouched by normalization');
+  assert.equal(normalized.to.label, 'Kandy');
+});
+
+await test('fromLocationId/toLocationId are stored completely independently of journeyId — setting one never implies or requires the other', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const colombo = await createLocation(dest.id, { name: 'Colombo' });
+  const kandy = await createLocation(dest.id, { name: 'Kandy' });
+  const withoutJourney = await createTransportEntry(dest.id, {
+    from: { label: 'Colombo' }, to: { label: 'Kandy' }, fromLocationId: colombo.id, toLocationId: kandy.id,
+  });
+  assert.equal(withoutJourney.journeyId, null, 'real location endpoints do not require or auto-create a journey link');
+
+  const journey = await createJourney(dest.id, { fromLocationId: colombo.id, toLocationId: kandy.id });
+  const withJourney = await createTransportEntry(dest.id, {
+    from: { label: 'Colombo' }, to: { label: 'Kandy' }, fromLocationId: colombo.id, toLocationId: kandy.id, journeyId: journey.id,
+  });
+  assert.equal(withJourney.journeyId, journey.id);
+  assert.equal(withJourney.fromLocationId, colombo.id, 'journeyId and fromLocationId/toLocationId coexist without conflict');
+});
+
+await test('local transport is unaffected by fromLocationId/toLocationId — it never sets or requires them', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const kandy = await createLocation(dest.id, { name: 'Kandy' });
+  const local = await createTransportEntry(dest.id, { travelType: 'local', locationId: kandy.id, mode: 'Tuk-tuk' });
+  assert.equal(local.fromLocationId, null);
+  assert.equal(local.toLocationId, null);
+  assert.equal(local.locationId, kandy.id, 'local transport continues to use locationId, not from/to endpoints');
+});
+
+await test('a legacy transport record with a stored priority value keeps it in storage even though the form no longer shows or sets it', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const entry = await createTransportEntry(dest.id, { from: { label: 'Colombo' }, to: { label: 'Galle' }, priority: 'optional' });
+  const updated = await updateTransportEntry(entry.id, { duration: '2.5 hours' });
+  assert.equal(updated.priority, 'optional', 'updating an unrelated field must never silently clear a pre-existing priority value');
+});
+
 console.log('\n20b. "Other" fields — a chosen "Other" value is preserved with its own explanation, across every control that actually offers Other');
 await test('an accommodation type of "Other" preserves its free-text explanation separately', async () => {
   const dest = await createDestination({ name: 'Sri Lanka' });
@@ -1289,6 +1563,37 @@ await test('a practical-info topic of "Other" preserves its free-text explanatio
   assert.equal(entry.topicOther, 'Tuk-tuk haggling norms');
 });
 
+console.log('\n13e. Practical Info — custom topics (Phase 3 Chunk 8: already supported at the data layer via topic="Other" + topicOther)');
+await test('multiple distinct custom topics can coexist for the same destination, each independently identifiable', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const festivals = await createPracticalInfoEntry(dest.id, { topic: 'Other', topicOther: 'Local Festivals', details: 'Vesak in May' });
+  const tipping = await createPracticalInfoEntry(dest.id, { topic: 'Other', topicOther: 'Tipping norms', details: '10% is standard' });
+  const items = await listPracticalInfoEntries(dest.id);
+  const labels = items.map(i => i.topic === 'Other' ? i.topicOther : i.topic).sort();
+  assert.deepEqual(labels, ['Local Festivals', 'Tipping norms']);
+  assert.notEqual(festivals.id, tipping.id);
+});
+
+await test('a custom-topic entry can be added to, edited, and deleted exactly like a predefined-topic entry', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const entry = await createPracticalInfoEntry(dest.id, { topic: 'Other', topicOther: 'Local Festivals', details: 'Vesak in May' });
+  const updated = await updatePracticalInfoEntry(entry.id, { details: 'Vesak in May, Poson in June' });
+  assert.equal(updated.details, 'Vesak in May, Poson in June');
+  assert.equal(updated.topicOther, 'Local Festivals', 'editing details does not disturb the custom topic name');
+  await deletePracticalInfoEntry(entry.id);
+  const remaining = await listPracticalInfoEntries(dest.id);
+  assert.equal(remaining.find(i => i.id === entry.id), undefined);
+});
+
+await test('a second entry can be added under an already-used custom topic name, grouping naturally with the first', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  await createPracticalInfoEntry(dest.id, { topic: 'Other', topicOther: 'Local Festivals', name: 'Vesak', details: 'May full moon' });
+  await createPracticalInfoEntry(dest.id, { topic: 'Other', topicOther: 'Local Festivals', name: 'Poson', details: 'June full moon' });
+  const items = await listPracticalInfoEntries(dest.id);
+  const festivalEntries = items.filter(i => i.topic === 'Other' && i.topicOther === 'Local Festivals');
+  assert.equal(festivalEntries.length, 2, 'both entries share the same custom topic name and can be grouped together by it');
+});
+
 await test('legacy accommodation/transport/practicalInfo records with an "Other" value but no *Other explanation field remain readable', async () => {
   const dest = await createDestination({ name: 'Sri Lanka' });
   // Simulate records saved before the *Other fields existed.
@@ -1304,6 +1609,58 @@ await test('accommodation supports locationId scoping the same way attractions/t
   assert.equal(hotel.locationId, bangkok.id);
   const wholeDestHotel = await createAccommodation(dest.id, { place: { name: 'Chain option, TBD city' } });
   assert.equal(wholeDestHotel.locationId, null);
+});
+
+console.log('\n22. Phase 3 Chunk 1 — section-specific classification replacing generic Priority');
+await test('an attraction can be created with a visitPriority (Must see / Maybe / Skippable), independent of the generic shared priority field', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const attraction = await createAttraction(dest.id, { place: { name: 'Sigiriya' }, visitPriority: 'must_see' });
+  assert.equal(attraction.visitPriority, 'must_see');
+  assert.equal(attraction.priority, null, 'the generic shared priority field defaults to null and is untouched by visitPriority');
+});
+
+await test('an attraction with no visitPriority set defaults to null, not a forced value', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const attraction = await createAttraction(dest.id, { place: { name: 'Galle Fort' } });
+  assert.equal(attraction.visitPriority, null);
+});
+
+await test('an attraction saved before visitPriority existed remains fully readable (no key at all, not just null)', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const attraction = await createAttraction(dest.id, { place: { name: 'Old Attraction' } });
+  delete attraction.visitPriority; // simulate a genuinely pre-Phase-3 record
+  assert.equal(attraction.place.name, 'Old Attraction', 'reading an old record with no visitPriority key at all does not throw or corrupt the record');
+});
+
+await test('a restaurant can be created with a priceTier (Budget-friendly / Regular / Fine dining), independent of the generic shared priority field', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const restaurant = await createRestaurantEntry(dest.id, { place: { name: 'Ministry of Crab' }, priceTier: 'fine_dining' });
+  assert.equal(restaurant.priceTier, 'fine_dining');
+  assert.equal(restaurant.priority, null);
+});
+
+await test('a restaurant with no priceTier set defaults to null', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const restaurant = await createRestaurantEntry(dest.id, { place: { name: 'Local eatery' } });
+  assert.equal(restaurant.priceTier, null);
+});
+
+await test('a restaurant saved before priceTier existed remains fully readable', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const restaurant = await createRestaurantEntry(dest.id, { place: { name: 'Old Restaurant' } });
+  delete restaurant.priceTier;
+  assert.equal(restaurant.place.name, 'Old Restaurant');
+});
+
+await test('accommodation/transport/shopping records no longer require or set the generic priority field, but old stored values are never rewritten', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const hotel = await createAccommodation(dest.id, { place: { name: 'Old Hotel' } });
+  assert.equal(hotel.priority, null, 'a new accommodation record has no priority set, since the form no longer offers it');
+  // Simulate an old record that DOES have a stored priority value from
+  // before this chunk — updating other fields must never clear it.
+  const legacyHotel = await createAccommodation(dest.id, { place: { name: 'Legacy Hotel' }, priority: 'must_know' });
+  const updated = await updateAccommodation(legacyHotel.id, { roomType: 'Deluxe' });
+  assert.equal(updated.priority, 'must_know', 'updating an unrelated field must never silently clear a pre-existing priority value the form no longer shows');
 });
 
 console.log('\n21. Database version upgrade to v5 (journeys + dishes) preserves data through the full chain');

@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
-import QuickAdd from './QuickAdd';
+import { Link, NavLink, Outlet } from 'react-router-dom';
+import AddEntry from './AddEntry';
 import './AppShell.css';
 
 const NAV_ITEMS = [
@@ -12,18 +12,7 @@ const NAV_ITEMS = [
 // immediately while initial data loads), same pattern proven in the
 // previous Dossier.
 export default function AppShell({ children }) {
-  const navigate = useNavigate();
-  const [quickAddOpen, setQuickAddOpen] = useState(false);
-
-  // After a Quick Add save, jump to the destination it was saved
-  // under — the person immediately sees the record they just created,
-  // in context, rather than wondering whether it saved. Cached data
-  // for that destination/section was already invalidated by QuickAdd
-  // itself before this fires, so the destination page fetches fresh.
-  function handleQuickAddSaved(destinationId) {
-    setQuickAddOpen(false);
-    navigate(`/destinations/${destinationId}`);
-  }
+  const [addOpen, setAddOpen] = useState(false);
 
   return (
     <div className="app-shell">
@@ -32,7 +21,7 @@ export default function AppShell({ children }) {
           <span className="app-shell__brand-mark">D</span>
           <span className="app-shell__brand-name">Dossier</span>
         </Link>
-        <button type="button" className="app-shell__quick-add" onClick={() => setQuickAddOpen(true)}>
+        <button type="button" className="app-shell__quick-add" onClick={() => setAddOpen(true)}>
           + Add to Dossier
         </button>
         <nav className="app-shell__sidebar-nav">
@@ -51,7 +40,7 @@ export default function AppShell({ children }) {
         </main>
       </div>
 
-      <button type="button" className="app-shell__fab" onClick={() => setQuickAddOpen(true)} aria-label="Add to Dossier">
+      <button type="button" className="app-shell__fab" onClick={() => setAddOpen(true)} aria-label="Add to Dossier">
         +
       </button>
 
@@ -64,7 +53,7 @@ export default function AppShell({ children }) {
         ))}
       </nav>
 
-      <QuickAdd open={quickAddOpen} onClose={() => setQuickAddOpen(false)} onSaved={handleQuickAddSaved} />
+      <AddEntry open={addOpen} onClose={() => setAddOpen(false)} />
     </div>
   );
 }

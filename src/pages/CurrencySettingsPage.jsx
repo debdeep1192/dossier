@@ -14,6 +14,8 @@ export default function CurrencySettingsPage() {
   const [newCurrency, setNewCurrency] = useState('');
   const [rateInputs, setRateInputs] = useState({});
   const [preview, setPreview] = useState(null);
+  const [previewFrom, setPreviewFrom] = useState('INR');
+  const [previewTo, setPreviewTo] = useState('USD');
 
   const fetcher = useCallback(async () => {
     const [destination, rates] = await Promise.all([getDestination(destinationId), listExchangeRates()]);
@@ -93,33 +95,58 @@ export default function CurrencySettingsPage() {
       </Card>
 
       <h2>Exchange rates</h2>
-      <p className="entry-card__meta" style={{ marginBottom: 'var(--space-4)' }}>Set a rate between any two currencies you're using. Changing a rate only affects future display conversions — it never edits research records you've already saved.</p>
+      <p className="entry-card__meta" style={{ marginBottom: 'var(--space-4)' }}>
+        Rates are set against USD — enter how much of each currency equals 1 USD. Dossier works out conversions between any two currencies you've added through USD automatically. Changing a rate only affects future display conversions — it never edits research records you've already saved.
+      </p>
 
-      {currencies.flatMap((from, i) => currencies.slice(i + 1).map(to => (
-        <Card key={`${from}_${to}`} padding="sm" className="entry-card" style={{ marginBottom: 'var(--space-3)', display: 'block' }}>
-          <p className="entry-card__title">{from} → {to}</p>
-          {(() => {
-            const existing = rates.find(r => r.pair === `${from}_${to}`);
-            return existing ? <p className="entry-card__meta">Current rate: 1 {from} = {existing.rate} {to}</p> : <p className="entry-card__meta">No rate set yet.</p>;
-          })()}
+      {currencies.filter(c => c !== 'USD').map((code) => {
+        const existing = rates.find(r => r.pair === `USD_${code}`);
+        const inverseExisting = !existing && rates.find(r => r.pair === `${code}_USD`);
+        const key = `USD_${code}`;
+        return (
+          <Card key={code} padding="sm" className="entry-card" style={{ marginBottom: 'var(--space-3)', display: 'block' }}>
+            <p className="entry-card__title">1 USD = ? {code}</p>
+            {existing ? (
+              <p className="entry-card__meta">Current: 1 USD = {existing.rate} {code}</p>
+            ) : inverseExisting ? (
+              <p className="entry-card__meta">Current (derived from a saved {code} → USD rate): 1 USD ≈ {(1 / inverseExisting.rate).toFixed(4)} {code}</p>
+            ) : (
+              <p className="entry-card__meta">No rate set yet.</p>
+            )}
+            <div className="currency-page__rate-row">
+              <Input
+                type="number"
+                step="0.0001"
+                placeholder={`e.g. 88`}
+                value={rateInputs[key] || ''}
+                onChange={e => setRateInputs(prev => ({ ...prev, [key]: e.target.value }))}
+              />
+              <Button size="sm" onClick={() => handleSetRate('USD', code)}>Save rate</Button>
+            </div>
+          </Card>
+        );
+      })}
+
+      {currencies.filter(c => c !== 'USD').length >= 2 && (
+        <Card padding="sm" className="entry-card" style={{ marginBottom: 'var(--space-3)', display: 'block' }}>
+          <p className="entry-card__title">Check a conversion</p>
+          <p className="entry-card__meta" style={{ marginBottom: 'var(--space-2)' }}>Cross-currency conversions (e.g. LKR → INR) are worked out through USD automatically, using the rates above.</p>
           <div className="currency-page__rate-row">
-            <Input
-              type="number"
-              step="0.0001"
-              placeholder={`e.g. 1 ${from} = ? ${to}`}
-              value={rateInputs[`${from}_${to}`] || ''}
-              onChange={e => setRateInputs(prev => ({ ...prev, [`${from}_${to}`]: e.target.value }))}
-            />
-            <Button size="sm" onClick={() => handleSetRate(from, to)}>Save rate</Button>
-            <Button size="sm" variant="ghost" onClick={() => handlePreview(from, to, 100)}>Preview 100 {from}</Button>
+            <Select aria-label="From currency" value={previewFrom} onChange={e => setPreviewFrom(e.target.value)}>
+              {currencies.map(c => <option key={c} value={c}>{c}</option>)}
+            </Select>
+            <Select aria-label="To currency" value={previewTo} onChange={e => setPreviewTo(e.target.value)}>
+              {currencies.map(c => <option key={c} value={c}>{c}</option>)}
+            </Select>
+            <Button size="sm" variant="ghost" onClick={() => handlePreview(previewFrom, previewTo, 100)}>Preview 100 {previewFrom}</Button>
           </div>
-          {preview && preview.from === from && preview.to === to && (
+          {preview && preview.from === previewFrom && preview.to === previewTo && (
             <p className="entry-card__meta">
-              {preview.converted !== null ? `100 ${from} ≈ ${preview.converted.toFixed(2)} ${to}` : 'No rate set for this pair yet.'}
+              {preview.converted !== null ? `100 ${preview.from} ≈ ${preview.converted.toFixed(2)} ${preview.to}` : `No rate available for ${preview.from} → ${preview.to} yet.`}
             </p>
           )}
         </Card>
-      )))}
+      )}
     </div>
   );
 }

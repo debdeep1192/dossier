@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
+import { useAutoOpenNewForm } from '../../hooks/useAutoOpenNewForm';
 import { getDestination } from '../../db/stores/destinations';
 import { listTransportEntries, createTransportEntry, updateTransportEntry, deleteTransportEntry, emptyTransportEntry, normalizeTransportEntry } from '../../db/stores/transport';
 import { listLocations, describeLocationContext } from '../../db/stores/locations';
@@ -11,7 +12,6 @@ import Card from '../../components/Card';
 import Button from '../../components/Button';
 import Modal from '../../components/Modal';
 import { Input, TextArea, Select } from '../../components/Field';
-import { PriorityBadge } from '../../components/Badge';
 import { MoneyField, MoneyDisplay } from '../../components/Money';
 import { EmptyState, LoadingState, ErrorState } from '../../components/States';
 import { TRANSPORT_MODES, TRANSPORT_DEFAULT_UNIT_BY_MODE, TRANSPORT_PRICE_UNITS } from '../../lib/priceUnits.js';
@@ -19,7 +19,7 @@ import Disclosure from '../../components/Disclosure';
 import { hasAdvancedContent } from '../../lib/formHelpers.js';
 import { isMoneyEmpty } from '../../db/shared.js';
 import LocationScopeField from '../../components/LocationScopeField';
-import JourneyField from '../../components/JourneyField';
+import RouteField from '../../components/RouteField';
 import OtherSelect from '../../components/OtherSelect';
 
 export default function TransportPage() {
@@ -27,6 +27,7 @@ export default function TransportPage() {
   const [searchParams] = useSearchParams();
   const contextLocationId = searchParams.get('location') || null;
   const [editing, setEditing] = useState(null);
+  useAutoOpenNewForm(setEditing);
 
   const fetcher = useCallback(async () => {
     const [destination, rawItems, locations, journeys] = await Promise.all([
@@ -76,9 +77,8 @@ export default function TransportPage() {
                 <span className="entry-card__title">
                   {item.travelType === 'local'
                     ? `Local transport${!contextLocationId ? ` — ${describeLocationContext(item.locationId, locations)}` : ''}`
-                    : `${item.from?.label || '?'} → ${item.to?.label || '?'}`}
+                    : `${locations.find(l => l.id === item.fromLocationId)?.name || item.from?.label || '?'} → ${locations.find(l => l.id === item.toLocationId)?.name || item.to?.label || '?'}`}
                 </span>
-                <PriorityBadge priority={item.priority} />
               </div>
               {item.journeyId && <p className="entry-card__meta">{describeJourney(journeys.find(j => j.id === item.journeyId), locations)}</p>}
               {item.mode && <p className="entry-card__meta">{item.mode === 'Other' ? (item.modeOther || 'Other') : item.mode}{item.duration ? ` · ${item.duration}` : ''}</p>}
@@ -116,8 +116,8 @@ export default function TransportPage() {
 function TransportForm({ destinationId, record, currencies, defaultCurrency, locations, journeys, contextLocationId, onAddCurrency, onClose, onSaved }) {
   const base = record || emptyTransportEntry();
   const [travelType, setTravelType] = useState(base.travelType || 'inter_city');
-  const [fromLabel, setFromLabel] = useState(base.from?.label || '');
-  const [toLabel, setToLabel] = useState(base.to?.label || '');
+  const [fromLocationId, setFromLocationId] = useState(base.fromLocationId || '');
+  const [toLocationId, setToLocationId] = useState(base.toLocationId || '');
   const [locationId, setLocationId] = useState(base.locationId ?? contextLocationId ?? null);
   const [journeyId, setJourneyId] = useState(base.journeyId || null);
   const [mode, setMode] = useState(base.mode || '');
@@ -126,17 +126,26 @@ function TransportForm({ destinationId, record, currencies, defaultCurrency, loc
   const [duration, setDuration] = useState(base.duration || '');
   const [schedule, setSchedule] = useState(base.schedule || '');
   const [bookingNotes, setBookingNotes] = useState(base.bookingNotes || '');
-  const [priority, setPriority] = useState(base.priority || '');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [journeyListVersion, setJourneyListVersion] = useState(0); // bumped after creating a journey inline, so JourneyField's options refresh next render
+  const [journeyListVersion, setJourneyListVersion] = useState(0); // bumped after creating a route inline, so RouteField's options refresh next render
   const [localJourneys, setLocalJourneys] = useState(journeys);
+
+  // A legacy record's endpoints may be free-text labels with no real
+  // fromLocationId/toLocationId at all (saved before Chunk 6). Editing
+  // such a record still shows its original labels for reference, but
+  // going forward the only way to SET an inter-city endpoint is by
+  // picking a real location — see the <Select>s below. This is a
+  // read-only fallback display, never a second way to enter free text.
+  const legacyFromLabel = !fromLocationId && base.from?.label ? base.from.label : null;
+  const legacyToLabel = !toLocationId && base.to?.label ? base.to.label : null;
+  const selectedFromName = locations.find(l => l.id === fromLocationId)?.name;
+  const selectedToName = locations.find(l => l.id === toLocationId)?.name;
 
   const advancedHasContent = hasAdvancedContent(
     !isMoneyEmpty(base.price),
     base.duration,
     base.schedule,
-    base.priority,
   );
 
   function handleModeChange(newMode) {
@@ -157,18 +166,26 @@ function TransportForm({ destinationId, record, currencies, defaultCurrency, loc
 
   async function handleSubmit(e) {
     e.preventDefault();
-    if (travelType !== 'local' && (!fromLabel.trim() || !toLabel.trim())) { setError('Both "From" and "To" are required for inter-city transport.'); return; }
+    if (travelType !== 'local') {
+      const hasFrom = fromLocationId || legacyFromLabel;
+      const hasTo = toLocationId || legacyToLabel;
+      if (!hasFrom || !hasTo) { setError('Choose both a "From" and a "To" city.'); return; }
+      if (fromLocationId && toLocationId && fromLocationId === toLocationId) { setError('"From" and "To" must be different cities.'); return; }
+    }
     setError('');
     setSubmitting(true);
     try {
+      const fromName = locations.find(l => l.id === fromLocationId)?.name;
+      const toName = locations.find(l => l.id === toLocationId)?.name;
       const fields = {
         travelType,
-        from: travelType === 'local' ? { label: '', place: null } : { label: fromLabel.trim(), place: null },
-        to: travelType === 'local' ? { label: '', place: null } : { label: toLabel.trim(), place: null },
+        from: travelType === 'local' ? { label: '', place: null } : { label: fromName || legacyFromLabel || '', place: null },
+        to: travelType === 'local' ? { label: '', place: null } : { label: toName || legacyToLabel || '', place: null },
+        fromLocationId: travelType === 'local' ? null : (fromLocationId || null),
+        toLocationId: travelType === 'local' ? null : (toLocationId || null),
         locationId: travelType === 'local' ? locationId : null,
         journeyId,
         mode, modeOther: mode === 'Other' ? modeOther : '', price, duration, schedule, bookingNotes,
-        priority: priority || null,
       };
       if (record) await updateTransportEntry(record.id, fields);
       else await createTransportEntry(destinationId, fields);
@@ -184,19 +201,32 @@ function TransportForm({ destinationId, record, currencies, defaultCurrency, loc
     <Modal open onClose={onClose} title={record ? 'Edit Transport' : 'New Transport'}>
       <form onSubmit={handleSubmit}>
         <Select label="Type" value={travelType} onChange={e => setTravelType(e.target.value)}>
-          <option value="inter_city">Inter-city / journey (From → To)</option>
+          <option value="inter_city">Inter-city / route (From → To)</option>
           <option value="local">Local transport (getting around one place)</option>
         </Select>
 
         {travelType === 'local' ? (
           <LocationScopeField locations={locations} value={locationId} onChange={setLocationId} lockedLocationId={record ? null : contextLocationId} />
+        ) : locations.length < 2 ? (
+          <p className="form-error" role="alert">Add at least two cities/locations to this destination before creating inter-city transport.</p>
         ) : (
           <>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-2)' }}>
-              <Input label="From" required value={fromLabel} onChange={e => setFromLabel(e.target.value)} placeholder="e.g. Colombo" />
-              <Input label="To" required value={toLabel} onChange={e => setToLabel(e.target.value)} placeholder="e.g. Kandy" />
+              <Select label="From" value={fromLocationId} onChange={e => setFromLocationId(e.target.value)}>
+                <option value="">{legacyFromLabel ? `${legacyFromLabel} (choose a city)` : 'Choose a city…'}</option>
+                {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+              </Select>
+              <Select label="To" value={toLocationId} onChange={e => setToLocationId(e.target.value)}>
+                <option value="">{legacyToLabel ? `${legacyToLabel} (choose a city)` : 'Choose a city…'}</option>
+                {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+              </Select>
             </div>
-            <JourneyField key={journeyListVersion} journeys={localJourneys} locations={locations} destinationId={destinationId} value={journeyId} onChange={setJourneyId} onJourneyCreated={refreshJourneys} />
+            {(legacyFromLabel || legacyToLabel) && (
+              <p className="entry-card__meta" style={{ marginTop: 'calc(-1 * var(--space-2))', marginBottom: 'var(--space-2)' }}>
+                Originally saved as "{legacyFromLabel || selectedFromName}" → "{legacyToLabel || selectedToName}". Pick cities above to link this to real locations.
+              </p>
+            )}
+            <RouteField key={journeyListVersion} journeys={localJourneys} locations={locations} destinationId={destinationId} value={journeyId} onChange={setJourneyId} onJourneyCreated={refreshJourneys} />
           </>
         )}
 
@@ -207,13 +237,6 @@ function TransportForm({ destinationId, record, currencies, defaultCurrency, loc
           <MoneyField value={price} onChange={setPrice} currencies={currencies} defaultCurrency={defaultCurrency} unitOptions={TRANSPORT_PRICE_UNITS} defaultUnit={TRANSPORT_DEFAULT_UNIT_BY_MODE[mode] || 'Per person'} onAddCurrency={onAddCurrency} />
           <Input label="Duration" value={duration} onChange={e => setDuration(e.target.value)} placeholder="e.g. 3 hours" />
           <Input label="Schedule / frequency" value={schedule} onChange={e => setSchedule(e.target.value)} />
-          <Select label="Priority" value={priority} onChange={e => setPriority(e.target.value)}>
-            <option value="">No priority set</option>
-            <option value="must_know">Must Know</option>
-            <option value="useful">Useful</option>
-            <option value="optional">Optional</option>
-            <option value="reference">Reference</option>
-          </Select>
         </Disclosure>
 
         {error && <p className="form-error" role="alert">{error}</p>}

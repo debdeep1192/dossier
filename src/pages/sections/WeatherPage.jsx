@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
+import { useAutoOpenNewForm } from '../../hooks/useAutoOpenNewForm';
 import { getDestination } from '../../db/stores/destinations';
 import { listWeatherNotes, createWeatherNote, updateWeatherNote, deleteWeatherNote, emptyWeatherNote, normalizeWeatherNote } from '../../db/stores/weatherNotes';
 import { useCachedQuery, invalidateCachedQuery, invalidateCachedQueryPrefix } from '../../hooks/useCachedQuery';
@@ -9,15 +10,32 @@ import Button from '../../components/Button';
 import Modal from '../../components/Modal';
 import { Input, TextArea, Select } from '../../components/Field';
 import { EmptyState, LoadingState, ErrorState } from '../../components/States';
-import { WEATHER_PRECIPITATION_LEVELS, WEATHER_RECOMMENDATIONS, MONTHS } from '../../lib/weatherOptions.js';
+import { WEATHER_PRECIPITATION_LEVELS, WEATHER_RECOMMENDATIONS, MONTHS, defaultDateRangeForMonths } from '../../lib/weatherOptions.js';
 import Disclosure from '../../components/Disclosure';
 import { hasAdvancedContent } from '../../lib/formHelpers.js';
 
 const RECOMMENDATION_LABEL = Object.fromEntries(WEATHER_RECOMMENDATIONS.map(r => [r.value, r.label]));
 
+// Plain day/month display, ignoring the arbitrary reference year
+// stored in startDate/endDate (see defaultDateRangeForMonths in
+// weatherOptions.js — the year is never meaningful for a recurring
+// yearly weather period).
+function formatDateRange(startDate, endDate) {
+  const fmt = (iso) => {
+    if (!iso) return null;
+    const [, month, day] = iso.split('-').map(Number);
+    return `${day} ${MONTHS[month - 1]?.slice(0, 3) || ''}`;
+  };
+  const start = fmt(startDate);
+  const end = fmt(endDate);
+  if (start && end) return `${start} → ${end}`;
+  return start || end || '';
+}
+
 export default function WeatherPage() {
   const { destinationId } = useParams();
   const [editing, setEditing] = useState(null);
+  useAutoOpenNewForm(setEditing);
 
   const fetcher = useCallback(async () => {
     const [destination, rawItems] = await Promise.all([getDestination(destinationId), listWeatherNotes(destinationId)]);
@@ -54,6 +72,9 @@ export default function WeatherPage() {
                 <span className="entry-card__title">{item.period}</span>
                 {item.recommendation && <span className={`badge weather-recommendation weather-recommendation--${item.recommendation}`}>{RECOMMENDATION_LABEL[item.recommendation]}</span>}
               </div>
+              {(item.startDate || item.endDate) && (
+                <p className="entry-card__meta">{formatDateRange(item.startDate, item.endDate)}</p>
+              )}
               {(item.temperatureMin || item.temperatureMax) && (
                 <p className="entry-card__meta">{item.temperatureMin || '?'}–{item.temperatureMax || '?'}°{item.temperatureUnit || 'C'}</p>
               )}
@@ -75,6 +96,10 @@ export default function WeatherPage() {
 function WeatherForm({ destinationId, record, onClose, onSaved }) {
   const base = record || emptyWeatherNote();
   const [period, setPeriod] = useState(base.period || '');
+  const [startDate, setStartDate] = useState(base.startDate || '');
+  const [endDate, setEndDate] = useState(base.endDate || '');
+  const [rangeStartMonth, setRangeStartMonth] = useState('');
+  const [rangeEndMonth, setRangeEndMonth] = useState('');
   const [description, setDescription] = useState(base.description || '');
   const [temperatureMin, setTemperatureMin] = useState(base.temperatureMin ?? '');
   const [temperatureMax, setTemperatureMax] = useState(base.temperatureMax ?? '');
@@ -93,18 +118,30 @@ function WeatherForm({ destinationId, record, onClose, onSaved }) {
     base.recommendation,
   );
 
-  function handlePresetPick(e) {
-    const v = e.target.value;
-    if (v) setPeriod(v);
+  // Picking a month range fills in both the free-text `period` (if it's
+  // still blank, so we don't clobber something the person already
+  // typed) and sensible exact default dates — always editable
+  // afterward via the plain date inputs below.
+  function applyMonthRange(startMonth, endMonth) {
+    setRangeStartMonth(startMonth);
+    setRangeEndMonth(endMonth || startMonth);
+    if (!startMonth) return;
+    const effectiveEnd = endMonth || startMonth;
+    const { startDate: sd, endDate: ed } = defaultDateRangeForMonths(startMonth, effectiveEnd);
+    setStartDate(sd);
+    setEndDate(ed);
+    if (!period.trim()) {
+      setPeriod(startMonth === effectiveEnd ? startMonth : `${startMonth}–${effectiveEnd}`);
+    }
   }
 
   async function handleSubmit(e) {
     e.preventDefault();
-    if (!period.trim()) { setError('Give this a period, e.g. "December–February" or pick a month.'); return; }
+    if (!period.trim()) { setError('Give this a period, e.g. "December–February" or pick a month range.'); return; }
     setError('');
     setSubmitting(true);
     try {
-      const fields = { period: period.trim(), description, temperatureMin, temperatureMax, temperatureUnit, rain, snow, recommendation, recommendationNotes };
+      const fields = { period: period.trim(), startDate, endDate, description, temperatureMin, temperatureMax, temperatureUnit, rain, snow, recommendation, recommendationNotes };
       if (record) await updateWeatherNote(record.id, fields);
       else await createWeatherNote(destinationId, fields);
       onSaved();
@@ -118,11 +155,21 @@ function WeatherForm({ destinationId, record, onClose, onSaved }) {
   return (
     <Modal open onClose={onClose} title={record ? 'Edit Weather Note' : 'New Weather Note'}>
       <form onSubmit={handleSubmit}>
-        <Select label="Pick a month (optional shortcut)" value="" onChange={handlePresetPick}>
-          <option value="">Or type a custom period below…</option>
-          {MONTHS.map(m => <option key={m} value={m}>{m}</option>)}
-        </Select>
-        <Input label="Period" required value={period} onChange={e => setPeriod(e.target.value)} placeholder="e.g. December–February, or a single month" />
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-2)' }}>
+          <Select label="From month" value={rangeStartMonth} onChange={e => applyMonthRange(e.target.value, rangeEndMonth)}>
+            <option value="">Pick a month…</option>
+            {MONTHS.map(m => <option key={m} value={m}>{m}</option>)}
+          </Select>
+          <Select label="To month (optional)" value={rangeEndMonth} onChange={e => applyMonthRange(rangeStartMonth, e.target.value)}>
+            <option value="">Same month</option>
+            {MONTHS.map(m => <option key={m} value={m}>{m}</option>)}
+          </Select>
+        </div>
+        <Input label="Period" required value={period} onChange={e => setPeriod(e.target.value)} placeholder="e.g. December–February, or a single month" hint="Filled in automatically from the month picker above — feel free to edit it." />
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-2)' }}>
+          <Input label="Exact start date (optional)" type="date" value={startDate} onChange={e => setStartDate(e.target.value)} hint="Year doesn't matter — this repeats yearly." />
+          <Input label="Exact end date (optional)" type="date" value={endDate} onChange={e => setEndDate(e.target.value)} />
+        </div>
         <TextArea label="Description" value={description} onChange={e => setDescription(e.target.value)} rows={3} placeholder="A quick note is enough to save this — add temperature, rain/snow, and a recommendation below if you have them." />
 
         <Disclosure label="Add more details" defaultOpen={advancedHasContent}>

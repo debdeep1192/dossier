@@ -11,7 +11,8 @@
     "test": "node src/db/__tests__/foundation.test.js",
     "test:pdf": "node src/db/__tests__/pdf.test.js",
     "test:place-lookup": "node src/db/__tests__/placeLookup.test.js",
-    "test:all": "npm test && npm run test:pdf && npm run test:place-lookup"
+    "test:add-entry": "node src/db/__tests__/addEntry.test.js",
+    "test:all": "npm test && npm run test:pdf && npm run test:place-lookup && npm run test:add-entry"
   },
   "dependencies": {
     "pdfjs-dist": "^6.2.108",

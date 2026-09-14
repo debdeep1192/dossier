@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
+import { useAutoOpenNewForm } from '../hooks/useAutoOpenNewForm';
 import { getDestination } from '../db/stores/destinations';
 import { listSources, createSource, updateSource, deleteSource, emptySource } from '../db/stores/sources';
 import { useCachedQuery, invalidateCachedQuery, invalidateCachedQueryPrefix } from '../hooks/useCachedQuery';
@@ -13,6 +14,7 @@ import { EmptyState, LoadingState, ErrorState } from '../components/States';
 export default function SourcesPage() {
   const { destinationId } = useParams();
   const [editing, setEditing] = useState(null);
+  useAutoOpenNewForm(setEditing);
 
   const fetcher = useCallback(async () => {
     const [destination, items] = await Promise.all([getDestination(destinationId), listSources(destinationId)]);
