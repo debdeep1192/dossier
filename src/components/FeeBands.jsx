@@ -5,19 +5,19 @@ import { FEE_STATUS_OPTIONS, emptyFeeBand } from '../lib/feeBands.js';
 import './FeeBands.css';
 
 export function FeeBandsField({ label = 'Entry fee', bands, onChange, currencies = CORE_CURRENCIES, defaultCurrency, onAddCurrency }) {
-  const list = bands && bands.length > 0 ? bands : [emptyFeeBand()];
+  const list = bands && bands.length > 0 ? bands : [emptyFeeBand(defaultCurrency)];
 
   function updateBand(index, patch) {
     onChange(list.map((b, i) => (i === index ? { ...b, ...patch } : b)));
   }
 
   function addBand() {
-    onChange([...list, emptyFeeBand()]);
+    onChange([...list, emptyFeeBand(defaultCurrency)]);
   }
 
   function removeBand(index) {
     const next = list.filter((_, i) => i !== index);
-    onChange(next.length > 0 ? next : [emptyFeeBand()]);
+    onChange(next.length > 0 ? next : [emptyFeeBand(defaultCurrency)]);
   }
 
   return (

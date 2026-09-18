@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link, NavLink, Outlet } from 'react-router-dom';
+import { Link, NavLink, Outlet, useMatch, useSearchParams } from 'react-router-dom';
 import AddEntry from './AddEntry';
 import './AppShell.css';
 
@@ -13,6 +13,19 @@ const NAV_ITEMS = [
 // previous Dossier.
 export default function AppShell({ children }) {
   const [addOpen, setAddOpen] = useState(false);
+
+  // AppShell wraps <Routes> in App.jsx rather than being rendered inside
+  // a <Route> via <Outlet>, so it can't use useParams() to pick up
+  // :destinationId — that only resolves within the matched route's own
+  // subtree. useMatch() against the shared /destinations/:destinationId/*
+  // path (every section route follows this shape) works from anywhere
+  // inside the Router, which is what we need here. This mirrors the
+  // context DestinationDetail.jsx already derives and passes to its own
+  // <AddEntry> — see initialDestinationId/initialLocationId below.
+  const destinationMatch = useMatch('/destinations/:destinationId/*');
+  const [searchParams] = useSearchParams();
+  const currentDestinationId = destinationMatch?.params?.destinationId;
+  const currentLocationId = searchParams.get('location') || null;
 
   return (
     <div className="app-shell">
@@ -53,7 +66,12 @@ export default function AppShell({ children }) {
         ))}
       </nav>
 
-      <AddEntry open={addOpen} onClose={() => setAddOpen(false)} />
+      <AddEntry
+        open={addOpen}
+        onClose={() => setAddOpen(false)}
+        initialDestinationId={currentDestinationId}
+        initialLocationId={currentLocationId}
+      />
     </div>
   );
 }

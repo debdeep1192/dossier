@@ -112,7 +112,13 @@ function normalizeWikidataResult(entity, matchedLabel) {
  * dependency for it.
  */
 export function nameSimilarity(query, candidateName) {
-  const norm = (s) => (s || '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter(Boolean);
+  // Apostrophes and internal periods are part of how a name is
+  // written (Glenary's, St. Joseph's) — stripping them outright (not
+  // replacing with a space) keeps "Glenary's" and "Glenarys" as the
+  // same token instead of splitting into "glenary" + "s". Genuine
+  // word separators (hyphens, etc.) still fall through to the space
+  // replacement below, unchanged.
+  const norm = (s) => (s || '').toLowerCase().replace(/['’.]/g, '').replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter(Boolean);
   const qTokens = new Set(norm(query));
   const cTokens = new Set(norm(candidateName));
   if (qTokens.size === 0 || cTokens.size === 0) return 0;

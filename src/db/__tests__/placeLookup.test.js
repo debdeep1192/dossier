@@ -121,6 +121,30 @@ await test('a partial word overlap scores between 0 and 1', () => {
   assert.ok(score > 0 && score < 1, `expected a partial score, got ${score}`);
 });
 
+await test('an apostrophe does not split a name into spurious extra tokens (Glenary\'s vs Glenarys)', () => {
+  assert.equal(nameSimilarity('Glenarys', "Glenary's"), 1);
+});
+
+await test('apostrophe handling is case-insensitive', () => {
+  assert.equal(nameSimilarity("GLENARY'S", 'glenarys'), 1);
+});
+
+await test('a curly/typographic apostrophe is handled the same as a straight one', () => {
+  assert.equal(nameSimilarity('Glenary\u2019s', 'Glenarys'), 1);
+});
+
+await test('an internal period in an abbreviation does not block a match (St. Joseph\'s vs St Josephs)', () => {
+  assert.equal(nameSimilarity("St. Joseph's", 'St Josephs'), 1);
+});
+
+await test('hyphens still separate words as before (unchanged behavior)', () => {
+  assert.equal(nameSimilarity('Xi-An', 'Xi An'), 1);
+});
+
+await test('repeated/extra whitespace still collapses as before (unchanged behavior)', () => {
+  assert.equal(nameSimilarity('Foo  Bar', 'Foo Bar'), 1);
+});
+
 console.log('\n3. Candidate ranking — works uniformly on already-normalized candidates from either source');
 await test('ranking prefers the candidate with the closer name match', () => {
   const candidates = [

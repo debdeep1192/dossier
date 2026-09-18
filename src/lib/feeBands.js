@@ -5,8 +5,14 @@ export const FEE_STATUS_OPTIONS = [
   { value: 'unknown', label: 'Unknown / not specified' },
 ];
 
-export function emptyFeeBand() {
-  return { id: crypto.randomUUID(), label: '', minAge: '', maxAge: '', status: 'unknown', amount: '', currency: '' };
+// `defaultCurrency` lets a genuinely new band start with the
+// destination's real currency already set, instead of an empty string
+// that only *looks* filled in because the picker visually falls back
+// to the same default (see FeeBandsField in components/FeeBands.jsx).
+// Existing saved bands are untouched by this — this only affects the
+// shape of a brand-new band at creation time.
+export function emptyFeeBand(defaultCurrency = '') {
+  return { id: crypto.randomUUID(), label: '', minAge: '', maxAge: '', status: 'unknown', amount: '', currency: defaultCurrency };
 }
 
 // One band with just a status set (no label/amount) is the common case

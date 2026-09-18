@@ -587,6 +587,35 @@ await test('a single simple fee (no bands needed) stays simple', async () => {
   assert.equal(formatFeeBands(item.feeBands), 'Free');
 });
 
+await test('emptyFeeBand() with no argument defaults currency to an empty string (backward compatible)', () => {
+  const band = emptyFeeBand();
+  assert.equal(band.currency, '');
+});
+
+await test('emptyFeeBand(defaultCurrency) initializes a fresh band with the destination default currency, not blank', () => {
+  const band = emptyFeeBand('INR');
+  assert.equal(band.currency, 'INR');
+  // Everything else about a fresh band is unaffected by this change.
+  assert.equal(band.status, 'unknown');
+  assert.equal(band.amount, '');
+  assert.equal(band.label, '');
+});
+
+await test('a new fee band created with a default currency saves that currency, not blank, on an otherwise-untouched band', async () => {
+  const dest = await createDestination({ name: 'Test' });
+  const freshBand = { ...emptyFeeBand('INR'), status: 'paid', amount: 200 };
+  const item = await createAttraction(dest.id, { place: { name: 'New Fort' }, feeBands: [freshBand] });
+  assert.equal(item.feeBands[0].currency, 'INR', 'a genuinely new band should not persist a blank currency when a destination default exists');
+  assert.equal(item.feeBands[0].amount, 200);
+});
+
+await test('an existing saved fee band with its own currency is never rewritten by the default-currency initialization', async () => {
+  const dest = await createDestination({ name: 'Test' });
+  const savedBand = { id: crypto.randomUUID(), label: '', minAge: '', maxAge: '', status: 'paid', amount: 500, currency: 'LKR' };
+  const item = await createAttraction(dest.id, { place: { name: 'Old Fort' }, feeBands: [savedBand] });
+  assert.equal(item.feeBands[0].currency, 'LKR', 'emptyFeeBand()\'s default-currency change only affects newly-created bands, never a band that already carries its own currency');
+});
+
 console.log('\n9. Camera / videography charges');
 await test('camera and videography charges are separate optional Money fields', async () => {
   const dest = await createDestination({ name: 'Test' });
