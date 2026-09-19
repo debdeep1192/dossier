@@ -11,7 +11,7 @@
 // Run with: node src/db/__tests__/addEntry.test.js
 
 import assert from 'node:assert/strict';
-import { buildAddDestinationPath, SECTIONS_WITHOUT_AUTO_OPEN } from '../../lib/addEntryRouting.js';
+import { buildAddDestinationPath, SECTIONS_WITHOUT_AUTO_OPEN, matchCurrentSection } from '../../lib/addEntryRouting.js';
 
 let passed = 0, failed = 0;
 async function test(name, fn) {
@@ -61,6 +61,49 @@ await test('Practical Info with a location context still omits new=1 but keeps l
 await test('the Dishes section routes through its own path, which redirects into Food and Restaurants (DishesPage.jsx handles that, not this function)', () => {
   const path = buildAddDestinationPath({ key: 'dishes', path: 'dishes' }, 'dest-1', null);
   assert.equal(path, '/destinations/dest-1/dishes?new=1');
+});
+
+console.log('\n2. Current-section detection (Case A: Destination -> City -> Section -> + Add)');
+
+const TEST_SECTIONS = [
+  { key: 'attractions', path: 'attractions' },
+  { key: 'restaurants', path: 'restaurants' },
+  { key: 'practicalInfo', path: 'practical-info' },
+];
+
+await test('a URL already inside a section page matches that section', () => {
+  const section = matchCurrentSection('/destinations/dest-1/attractions', 'dest-1', TEST_SECTIONS);
+  assert.equal(section?.key, 'attractions');
+});
+
+await test('a multi-segment section path (e.g. practical-info) still matches exactly', () => {
+  const section = matchCurrentSection('/destinations/dest-1/practical-info', 'dest-1', TEST_SECTIONS);
+  assert.equal(section?.key, 'practicalInfo');
+});
+
+await test('a trailing slash on the section URL still matches', () => {
+  const section = matchCurrentSection('/destinations/dest-1/attractions/', 'dest-1', TEST_SECTIONS);
+  assert.equal(section?.key, 'attractions');
+});
+
+await test('the destination overview page itself (no section segment) does not match any section', () => {
+  const section = matchCurrentSection('/destinations/dest-1', 'dest-1', TEST_SECTIONS);
+  assert.equal(section, null);
+});
+
+await test('a page for a DIFFERENT destination never matches, even with the same section path', () => {
+  const section = matchCurrentSection('/destinations/dest-2/attractions', 'dest-1', TEST_SECTIONS);
+  assert.equal(section, null, 'the destinationId in the URL must match the one being checked against');
+});
+
+await test('an unrecognized path segment (not any known section) matches nothing', () => {
+  const section = matchCurrentSection('/destinations/dest-1/currency', 'dest-1', TEST_SECTIONS);
+  assert.equal(section, null);
+});
+
+await test('a missing destinationId (e.g. on Home) never matches, regardless of pathname', () => {
+  const section = matchCurrentSection('/', undefined, TEST_SECTIONS);
+  assert.equal(section, null);
 });
 
 console.log(`\n=== ${passed} passed, ${failed} failed ===\n`);

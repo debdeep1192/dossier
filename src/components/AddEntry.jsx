@@ -2,12 +2,12 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { SECTIONS } from '../sectionRegistry.js';
 import { listDestinations } from '../db/stores/destinations.js';
-import { listLocations } from '../db/stores/locations.js';
+import { listLocations, createLocation } from '../db/stores/locations.js';
 import { buildAddDestinationPath } from '../lib/addEntryRouting.js';
 import Modal from './Modal';
 import Button from './Button';
 import Card from './Card';
-import { Select } from './Field';
+import { Select, Input } from './Field';
 import './AddEntry.css';
 
 // The single, coherent "+ Add to Dossier" flow (Phase 3 Chunk 12) —
@@ -22,7 +22,7 @@ import './AddEntry.css';
 // full section page are therefore now the SAME form, not two different
 // ones.
 
-export default function AddEntry({ open, onClose, initialDestinationId, initialLocationId }) {
+export default function AddEntry({ open, onClose, initialDestinationId, initialLocationId, initialSection }) {
   const navigate = useNavigate();
   const [step, setStep] = useState('type'); // 'type' | 'context'
   const [selectedSection, setSelectedSection] = useState(null);
@@ -43,25 +43,47 @@ export default function AddEntry({ open, onClose, initialDestinationId, initialL
     navigate(buildAddDestinationPath(section, destinationId, locationId));
   }
 
+  // Case A ("Destination -> City -> Section", e.g. already on the
+  // Attractions page): the section is already known too, not just the
+  // destination/location — skip both the type picker AND the context
+  // picker entirely and go straight to that section's real form, the
+  // same form its own in-page "+ Add" button opens. See
+  // matchCurrentSection() in lib/addEntryRouting.js for how the
+  // caller (AppShell.jsx) detects this from the current URL.
+  useEffect(() => {
+    if (open && initialSection) {
+      goToSection(initialSection, initialDestinationId, initialLocationId);
+    }
+    // Only re-run when the modal is actually (re)opened or the
+    // detected section changes — not on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, initialSection]);
+
   function handleSelectSection(section) {
-    if (initialDestinationId !== undefined) {
-      // Context already known from where the person opened Add from
-      // (a destination or city page) — go straight to the section,
-      // no re-asking. See DestinationDetail.jsx for how this is passed.
+    if (initialDestinationId !== undefined && initialLocationId) {
+      // Case B with a specific city already selected — context fully
+      // known, go straight to the section. (Case A itself never
+      // reaches here: it's handled by the useEffect above, before the
+      // type step ever renders.)
       goToSection(section, initialDestinationId, initialLocationId);
       return;
     }
+    // Case B at the whole-destination view (destination known, no
+    // specific city), or Case C (opened from Home, destination itself
+    // still unknown) — ContextStep below asks only for whichever of
+    // destination/city is actually still missing.
     setSelectedSection(section);
     setStep('context');
   }
 
-  if (!open) return null;
+  if (!open || initialSection) return null;
 
   return (
     <Modal open={open} onClose={handleClose} title="Add to Dossier">
       {step === 'type' && <TypeStep onSelect={handleSelectSection} />}
       {step === 'context' && selectedSection && (
         <ContextStep
+          fixedDestinationId={initialDestinationId}
           onBack={() => setStep('type')}
           onContinue={(destinationId, locationId) => goToSection(selectedSection, destinationId, locationId)}
         />
@@ -83,15 +105,19 @@ function TypeStep({ onSelect }) {
   );
 }
 
-function ContextStep({ onBack, onContinue }) {
-  const [destinations, setDestinations] = useState(null);
-  const [destinationId, setDestinationId] = useState('');
+function ContextStep({ fixedDestinationId, onBack, onContinue }) {
+  const [destinations, setDestinations] = useState(fixedDestinationId ? [] : null);
+  const [destinationId, setDestinationId] = useState(fixedDestinationId || '');
   const [locations, setLocations] = useState([]);
-  const [locationId, setLocationId] = useState('');
+  const [locationId, setLocationId] = useState(''); // real location id, '' (whole destination), or '__other__'
+  const [newCityName, setNewCityName] = useState('');
+  const [error, setError] = useState('');
+  const [creatingCity, setCreatingCity] = useState(false);
 
   useEffect(() => {
+    if (fixedDestinationId) return; // destination already known — no need to load the full list
     listDestinations().then(setDestinations);
-  }, []);
+  }, [fixedDestinationId]);
 
   useEffect(() => {
     if (!destinationId) return;
@@ -106,9 +132,32 @@ function ContextStep({ onBack, onContinue }) {
     setLocationId('');
   }
 
-  if (destinations === null) return <p className="quick-add__hint">Loading destinations…</p>;
+  async function handleContinue() {
+    if (locationId === '__other__') {
+      // Case C's "Other / Add new city": the typed name becomes a
+      // real Dossier location under this destination (via the same
+      // createLocation() every other city-creation entry point uses —
+      // see db/stores/locations.js), not a value only stored on this
+      // one entry, so it appears in every city list/dropdown from now
+      // on, exactly like a city added from the Cities tab would.
+      if (!newCityName.trim()) { setError('Enter a name for the new city.'); return; }
+      setError('');
+      setCreatingCity(true);
+      try {
+        const created = await createLocation(destinationId, { name: newCityName.trim() });
+        onContinue(destinationId, created.id);
+      } catch (err) {
+        setError(err.message);
+        setCreatingCity(false);
+      }
+      return;
+    }
+    onContinue(destinationId, locationId || null);
+  }
 
-  if (destinations.length === 0) {
+  if (!fixedDestinationId && destinations === null) return <p className="quick-add__hint">Loading destinations…</p>;
+
+  if (!fixedDestinationId && destinations.length === 0) {
     return (
       <div>
         <p className="quick-add__hint">You don't have any destinations yet. Create one first from Home.</p>
@@ -119,21 +168,30 @@ function ContextStep({ onBack, onContinue }) {
 
   return (
     <div>
-      <Select label="Destination" required value={destinationId} onChange={e => handleDestinationChange(e.target.value)} autoFocus>
-        <option value="">Choose a destination…</option>
-        {destinations.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-      </Select>
-
-      {destinationId && locations.length > 0 && (
-        <Select label="City (optional)" hint="Leave blank if this applies to the whole destination." value={locationId} onChange={e => setLocationId(e.target.value)}>
-          <option value="">Whole destination</option>
-          {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+      {!fixedDestinationId && (
+        <Select label="Destination" required value={destinationId} onChange={e => handleDestinationChange(e.target.value)} autoFocus>
+          <option value="">Choose a destination…</option>
+          {destinations.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
         </Select>
       )}
 
+      {destinationId && (
+        <Select label="City" hint="Leave as whole destination if this doesn't belong to one specific city." value={locationId} onChange={e => { setLocationId(e.target.value); setError(''); }} autoFocus={Boolean(fixedDestinationId)}>
+          <option value="">Whole destination</option>
+          {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+          <option value="__other__">Other / Add new city…</option>
+        </Select>
+      )}
+
+      {locationId === '__other__' && (
+        <Input label="New city name" value={newCityName} onChange={e => setNewCityName(e.target.value)} placeholder="e.g. Ghoom" autoFocus />
+      )}
+
+      {error && <p className="form-error" role="alert">{error}</p>}
+
       <div className="quick-add__actions">
-        <Button variant="secondary" onClick={onBack}>Back</Button>
-        <Button disabled={!destinationId} onClick={() => onContinue(destinationId, locationId || null)}>Continue</Button>
+        <Button variant="secondary" onClick={onBack} disabled={creatingCity}>Back</Button>
+        <Button disabled={!destinationId || creatingCity} onClick={handleContinue}>{creatingCity ? 'Creating city…' : 'Continue'}</Button>
       </div>
     </div>
   );

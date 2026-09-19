@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { lookupPlace, getCachedConfirmedResult, setCachedConfirmedResult } from '../lib/placeLookup.js';
+import { lookupPlace, getCachedConfirmedResult, setCachedConfirmedResult, buildConfirmedPlace } from '../lib/placeLookup.js';
 import Button from './Button';
 import './PlaceLookup.css';
 
@@ -50,13 +50,7 @@ export default function PlaceLookup({ name, locationName, destinationName, expec
   }
 
   function handleSelect(candidate) {
-    const place = candidate.cached ? candidate.place : {
-      name: candidate.name,
-      locality: candidate.raw?.address?.suburb || candidate.raw?.address?.neighbourhood || '',
-      city: candidate.addressCity || candidate.raw?.address?.city || candidate.raw?.address?.town || candidate.raw?.address?.village || '',
-      lat: candidate.lat,
-      lng: candidate.lng,
-    };
+    const place = candidate.cached ? candidate.place : buildConfirmedPlace(candidate, locationName);
     setCachedConfirmedResult({ name, locationName, destinationName }, place);
     onConfirm(place);
     setStatus('idle');

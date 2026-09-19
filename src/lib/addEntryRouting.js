@@ -26,3 +26,22 @@ export function buildAddDestinationPath(section, destinationId, locationId) {
   const query = params.toString();
   return `/destinations/${destinationId}/${section.path}${query ? `?${query}` : ''}`;
 }
+
+// Detects whether the CURRENT URL is already inside one specific
+// section's own page for a known destination — e.g.
+// /destinations/abc/attractions. This is what lets the single global
+// Add entry point recognize Case A ("Destination -> City -> Section")
+// and skip both the type picker AND the destination/city picker
+// entirely, going straight to that section's real form — matching
+// what that section page's own in-page "+ Add" button already does.
+// Returns the matching section object, or null when the current
+// location isn't inside any section page (e.g. on the destination
+// overview, or on Home) — in which case the normal type-picker flow
+// (Case B / Case C) applies.
+export function matchCurrentSection(pathname, destinationId, sections) {
+  if (!destinationId || !pathname) return null;
+  const prefix = `/destinations/${destinationId}/`;
+  if (!pathname.startsWith(prefix)) return null;
+  const rest = pathname.slice(prefix.length).replace(/\/+$/, '');
+  return sections.find(s => s.path === rest) || null;
+}

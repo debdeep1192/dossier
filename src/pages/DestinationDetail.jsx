@@ -8,7 +8,7 @@ import Card from '../components/Card';
 import Button from '../components/Button';
 import { Input } from '../components/Field';
 import { LoadingState, ErrorState, EmptyState } from '../components/States';
-import AddEntry from '../components/AddEntry';
+import { useOpenAddEntry } from '../lib/addEntryContext.js';
 import './DestinationDetail.css';
 
 // The destination page has two primary tabs (Chunk 10):
@@ -31,7 +31,7 @@ export default function DestinationDetail() {
   const activeLocationId = searchParams.get('location') || '';
   const activeTab = TABS.includes(searchParams.get('tab')) ? searchParams.get('tab') : 'cities';
   const [managingLocations, setManagingLocations] = useState(false);
-  const [addOpen, setAddOpen] = useState(false);
+  const openAddEntry = useOpenAddEntry();
 
   const fetcher = useCallback(async () => {
     const destination = await getDestination(destinationId);
@@ -136,16 +136,9 @@ export default function DestinationDetail() {
           counts={counts}
           sectionHref={sectionHref}
           navigate={navigate}
-          onAdd={() => setAddOpen(true)}
+          onAdd={openAddEntry}
         />
       )}
-
-      <AddEntry
-        open={addOpen}
-        onClose={() => setAddOpen(false)}
-        initialDestinationId={destinationId}
-        initialLocationId={activeLocationId || null}
-      />
     </div>
   );
 }

@@ -19,6 +19,8 @@
 import assert from 'node:assert/strict';
 import {
   buildContextualQuery,
+  buildFallbackNames,
+  buildConfirmedPlace,
   nameSimilarity,
   rankCandidates,
   mergeCandidates,
@@ -91,6 +93,37 @@ function mockBothSources({ nominatimResults = [], wikidataHits = [], wikidataEnt
   };
 }
 
+// A query-aware mock, for tests that need DIFFERENT responses
+// depending on which exact `q=`/`search=` string a request used — in
+// particular, verifying the fallback-retry behavior actually sends a
+// shortened query and stops as soon as any real candidates come back,
+// rather than just checking the final merged result. `responses` maps
+// an exact search string (decoded) to { nominatimResults, wikidataHits,
+// wikidataEntities } for that specific attempt; an unlisted string
+// resolves to all-empty (a genuine zero-result attempt), matching how
+// the real providers behave for a query with no indexed match.
+function mockQueryAware(responses) {
+  return async (url) => {
+    const parsed = new URL(url);
+    if (url.includes('nominatim')) {
+      const q = parsed.searchParams.get('q');
+      return jsonResponse(responses[q]?.nominatimResults || []);
+    }
+    if (url.includes('wbsearchentities')) {
+      const search = parsed.searchParams.get('search');
+      return jsonResponse({ search: responses[search]?.wikidataHits || [] });
+    }
+    if (url.includes('wbgetentities')) {
+      // Every attempt's wikidataEntities get merged in — wbgetentities
+      // is only ever called with ids that came from THIS attempt's own
+      // wbsearchentities hits, so there's no cross-attempt ambiguity.
+      const merged = Object.assign({}, ...Object.values(responses).map(r => r.wikidataEntities || {}));
+      return jsonResponse({ entities: merged });
+    }
+    throw new Error(`Unexpected URL in test: ${url}`);
+  };
+}
+
 console.log('\n1. Contextual query construction');
 await test('combines name, location, and destination with commas, in order', () => {
   const q = buildContextualQuery({ name: 'Ganesh Temple', locationName: 'Bangkok', destinationName: 'Thailand' });
@@ -105,6 +138,21 @@ await test('omits blank parts rather than leaving empty segments', () => {
 
 await test('trims whitespace from each part', () => {
   assert.equal(buildContextualQuery({ name: '  Ganesh Temple  ', locationName: ' Bangkok ', destinationName: ' Thailand ' }), 'Ganesh Temple, Bangkok, Thailand');
+});
+
+await test('a city and destination sharing the same name are not duplicated in the query (the Darjeeling/Darjeeling bug)', () => {
+  const q = buildContextualQuery({ name: "Glenary's", locationName: 'Darjeeling', destinationName: 'Darjeeling' });
+  assert.equal(q, "Glenary's, Darjeeling", 'the destination should not repeat a city name it already matches');
+});
+
+await test('deduplication is case-insensitive', () => {
+  const q = buildContextualQuery({ name: 'Tiger Hill', locationName: 'darjeeling', destinationName: 'Darjeeling' });
+  assert.equal(q, 'Tiger Hill, darjeeling', 'the FIRST occurrence\'s casing is kept, the later duplicate is dropped');
+});
+
+await test('a genuinely different city and destination are both kept (no over-eager deduplication)', () => {
+  const q = buildContextualQuery({ name: 'Wat Pho', locationName: 'Bangkok', destinationName: 'Thailand' });
+  assert.equal(q, 'Wat Pho, Bangkok, Thailand');
 });
 
 console.log('\n2. Name similarity scoring');
@@ -406,16 +454,222 @@ await test('rapid repeated calls are throttled per lookupPlace() invocation (not
   let clock = 2300000;
   const now = () => clock;
 
-  await lookupPlace({ name: 'Ganesh Temple' }, { fetchImpl: countingFetch, now });
-  assert.equal(callCount, 2, 'one lookupPlace() call fires exactly two underlying requests: Wikidata + Nominatim');
+  // A single-word name is used deliberately: buildFallbackNames()
+  // produces no shorter variants for a one-word name (see its own
+  // tests below), so this stays a clean two-request round (Wikidata +
+  // Nominatim) with no fallback retries — isolating exactly what this
+  // test verifies (the throttle counts per lookupPlace() call, not per
+  // underlying request) from the separate fallback-retry behavior
+  // covered in section 5b below.
+  await lookupPlace({ name: 'Ganesh' }, { fetchImpl: countingFetch, now });
+  assert.equal(callCount, 2, 'one lookupPlace() call with no fallback retries fires exactly two underlying requests: Wikidata + Nominatim');
 
-  const second = await lookupPlace({ name: 'Ganesh Temple' }, { fetchImpl: countingFetch, now });
+  const second = await lookupPlace({ name: 'Ganesh' }, { fetchImpl: countingFetch, now });
   assert.equal(callCount, 2, 'a second lookupPlace() call within the throttle window must not hit the network at all');
   assert.ok(second.error, 'the throttled call should surface a message, not silently no-op');
 
   clock += 5000;
-  await lookupPlace({ name: 'Ganesh Temple' }, { fetchImpl: countingFetch, now });
+  await lookupPlace({ name: 'Ganesh' }, { fetchImpl: countingFetch, now });
   assert.equal(callCount, 4, 'a call after the throttle window has passed should reach the network again (2 more requests)');
+});
+
+console.log('\n5a. buildFallbackNames() — progressively shorter variants when the full name query fails');
+await test('a two-word name produces one fallback: the first word alone', () => {
+  assert.deepEqual(buildFallbackNames('Tiger Hill'), ['Tiger']);
+});
+
+await test('a three-word name produces progressively shorter fallbacks, longest first', () => {
+  assert.deepEqual(buildFallbackNames('Tiger Hill Observatory'), ['Tiger Hill', 'Tiger']);
+});
+
+await test('a single-word name has no shorter fallback to try', () => {
+  assert.deepEqual(buildFallbackNames('Glenarys'), []);
+});
+
+await test('a blank/whitespace-only name produces no fallbacks', () => {
+  assert.deepEqual(buildFallbackNames(''), []);
+  assert.deepEqual(buildFallbackNames('   '), []);
+});
+
+console.log('\n5b. lookupPlace() fallback retry — the actual "Tiger Hill Observatory" / "Glenary\'s" bug scenarios');
+await test('Tiger Hill Observatory: the full query legitimately finds nothing, but the "Tiger Hill" fallback finds the real place', async () => {
+  const fetchImpl = mockQueryAware({
+    // The full, over-specific query — a real, honest zero-result
+    // response from both sources, matching how Nominatim/Wikidata
+    // behave when a query word (here "Observatory") isn't part of
+    // either the OSM name/alt_name tags or the Wikidata label/aliases
+    // for the real underlying feature (see the code comment on
+    // buildFallbackNames for the researched reasoning behind this).
+    "Tiger Hill Observatory, Darjeeling": { nominatimResults: [], wikidataHits: [] },
+    // The one-word-shorter fallback DOES match — this is the real
+    // canonical name ("Tiger Hill, Darjeeling" per Wikidata Q16901632).
+    'Tiger Hill, Darjeeling': {
+      nominatimResults: [rawNominatim({ name: 'Tiger Hill', city: 'Darjeeling', country: 'India', osmClass: 'natural', importance: 0.4 })],
+    },
+    'Tiger Hill': { wikidataHits: [{ id: 'Q16901632', label: 'Tiger Hill, Darjeeling', description: 'hill in India with views of the Himalayas' }] },
+  });
+  const { candidates, error, matchedName } = await lookupPlace(
+    { name: 'Tiger Hill Observatory', locationName: 'Darjeeling' },
+    { fetchImpl, now: () => 3000000 },
+  );
+  assert.equal(error, null);
+  assert.ok(candidates.length > 0, 'the fallback-shortened query should surface the real place, not leave the person with nothing');
+  assert.equal(matchedName, 'Tiger Hill', 'the variant that actually found something should be reported, not the original name');
+  // Crucially: even though the fallback query used the SHORTER name,
+  // ranking still scores against the FULL name the person typed —
+  // this is not a blind accept of whatever the shortened query found.
+  assert.ok(candidates[0].sim > 0, 'the returned candidate must still score a real similarity against the full original name');
+});
+
+await test('an unrelated place that only matches the SHORTENED fallback query does not get a free pass — it is still ranked, not blindly accepted', async () => {
+  const fetchImpl = mockQueryAware({
+    'Tiger Hill Zoo, Darjeeling': { nominatimResults: [], wikidataHits: [] },
+    'Tiger Hill, Darjeeling': {
+      // A real place that happens to match the shortened query text,
+      // but is a poor match for what was actually typed.
+      nominatimResults: [rawNominatim({ name: 'Tiger Hill', city: 'Darjeeling', country: 'India', osmClass: 'natural', importance: 0.4 })],
+    },
+    'Tiger Hill': { wikidataHits: [] },
+  });
+  const { candidates } = await lookupPlace(
+    { name: 'Tiger Hill Zoo', locationName: 'Darjeeling' },
+    { fetchImpl, now: () => 3100000 },
+  );
+  // The candidate is still returned (manual confirmation is always up
+  // to the person — this module never silently filters), but its
+  // score must reflect that "Tiger Hill" is only a partial match for
+  // "Tiger Hill Zoo", not a perfect one.
+  assert.ok(candidates.length > 0);
+  assert.ok(candidates[0].sim < 1, 'a fallback-sourced candidate must not be scored as if it were an exact match to the original name');
+});
+
+await test("Glenary's: an EXACT match on the full query is used directly — no fallback attempt is even made", async () => {
+  let attemptedQueries = [];
+  const fetchImpl = async (url) => {
+    const parsed = new URL(url);
+    if (url.includes('nominatim')) {
+      attemptedQueries.push(parsed.searchParams.get('q'));
+      return jsonResponse([rawNominatim({ name: "Glenary's", city: 'Darjeeling', country: 'India', osmClass: 'amenity', importance: 0.35 })]);
+    }
+    if (url.includes('wbsearchentities')) {
+      attemptedQueries.push(parsed.searchParams.get('search'));
+      return jsonResponse({ search: [{ id: 'Q102789668', label: "Glenary's", description: 'colonial-era cafe in Darjeeling, India' }] });
+    }
+    if (url.includes('wbgetentities')) return jsonResponse({ entities: { Q102789668: { labels: { en: { value: "Glenary's" } }, descriptions: { en: { value: 'colonial-era cafe in Darjeeling, India' } }, claims: {} } } });
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+  const { candidates, error, matchedName } = await lookupPlace(
+    { name: "Glenary's", locationName: 'Darjeeling', destinationName: 'Darjeeling' },
+    { fetchImpl, now: () => 3200000 },
+  );
+  assert.equal(error, null);
+  assert.ok(candidates.length > 0, "Glenary's should be found directly — both providers have real data for it (verified via web search; see the report for what could not be live-tested)");
+  assert.equal(matchedName, "Glenary's", 'the ORIGINAL name matched — no fallback variant was needed');
+  // Only 2 requests total (one Nominatim + one Wikidata search; the
+  // wbgetentities follow-up is a 3rd but is part of the SAME attempt,
+  // not a retry) — confirms no fallback round fired when the first
+  // one already succeeded.
+  assert.equal(attemptedQueries.length, 2, 'an exact-match first attempt must not trigger any fallback request');
+  // And the duplicated-city bug is also gone: destination "Darjeeling"
+  // is not repeated after location "Darjeeling" in the Nominatim query.
+  assert.equal(attemptedQueries[0], "Glenary's, Darjeeling");
+});
+
+await test('when even every fallback variant genuinely finds nothing, the result is a graceful empty outcome, not an error', async () => {
+  const fetchImpl = mockQueryAware({}); // every possible query resolves to empty — a totally unknown place
+  const { candidates, error } = await lookupPlace(
+    { name: 'Some Made Up Place Nobody Mapped', locationName: 'Darjeeling' },
+    { fetchImpl, now: () => 3300000 },
+  );
+  assert.deepEqual(candidates, []);
+  assert.equal(error, null, 'exhausting all fallbacks with no results is still a genuine empty search, not a failure');
+});
+
+await test('a real network failure on the first attempt stops immediately — it does not retry fallbacks after a genuine error', async () => {
+  let callCount = 0;
+  const fetchImpl = async () => { callCount++; throw new Error('network down'); };
+  const { candidates, error } = await lookupPlace(
+    { name: 'Tiger Hill Observatory', locationName: 'Darjeeling' },
+    { fetchImpl, now: () => 3400000 },
+  );
+  assert.deepEqual(candidates, []);
+  assert.ok(error);
+  assert.equal(callCount, 2, 'a genuine failure (not just an empty result) must not trigger fallback retries — only 1 round (2 requests) should fire');
+});
+
+console.log('\n5c. buildConfirmedPlace() — preserve the known Dossier City; route provider admin detail into Area/locality, never into a new City');
+
+// A candidate shaped exactly like what normalizeNominatimResult()
+// produces for a real, sparsely-tagged rural feature (a hilltop with
+// no city/town/village tag of its own) — this is the actual "Tiger
+// Hill" scenario reported: Nominatim's address only has county/state.
+function candidateWithAddress({ name, address, lat = 27.0, lng = 88.25 }) {
+  return { name, lat, lng, raw: { address } };
+}
+
+await test('the Tiger Hill bug: a known Dossier City is preserved; the noisy county+state string never becomes the saved city', () => {
+  const candidate = candidateWithAddress({
+    name: 'Tiger Hill',
+    address: { county: 'Rangli Rangliot Jorebunglow Sukiapokhri', state: 'West Bengal', country: 'India' },
+  });
+  const place = buildConfirmedPlace(candidate, 'Darjeeling'); // the city already established by the current Add/edit context
+  assert.equal(place.city, 'Darjeeling', 'the already-known Dossier City must be preserved, not overwritten by provider admin data');
+  assert.notEqual(place.city, 'Rangli Rangliot Jorebunglow Sukiapokhri West Bengal');
+  assert.equal(place.locality, 'Rangli Rangliot Jorebunglow Sukiapokhri', 'the finer-grained provider detail belongs in Area/locality, not City');
+});
+
+await test('this works generically for ANY city/destination — not hardcoded to Darjeeling', () => {
+  const candidate = candidateWithAddress({
+    name: 'Some Rural Viewpoint',
+    address: { county: 'Some Random District', state: 'Some Random State', country: 'Elsewhere' },
+  });
+  const place = buildConfirmedPlace(candidate, 'Springfield');
+  assert.equal(place.city, 'Springfield', 'the mechanism must work for any known city name, not a special-cased one');
+  assert.equal(place.locality, 'Some Random District');
+});
+
+await test('when no Dossier City context is known yet, a genuine city/town/village tag is used as city (not county/state)', () => {
+  const candidate = candidateWithAddress({
+    name: 'Ghoom Monastery',
+    address: { town: 'Ghoom', county: 'Darjeeling district', state: 'West Bengal', country: 'India' },
+  });
+  const place = buildConfirmedPlace(candidate, null);
+  assert.equal(place.city, 'Ghoom', 'a real city-level tag should still be used when there is no established context to preserve');
+});
+
+await test('when no Dossier City context is known AND the provider has no city/town/village tag either, city stays blank rather than falling back to county/state', () => {
+  const candidate = candidateWithAddress({
+    name: 'Tiger Hill',
+    address: { county: 'Rangli Rangliot Jorebunglow Sukiapokhri', state: 'West Bengal', country: 'India' },
+  });
+  const place = buildConfirmedPlace(candidate, null);
+  assert.equal(place.city, '', 'county/state must never be used as the City value, even with no context to fall back on');
+  assert.equal(place.locality, 'Rangli Rangliot Jorebunglow Sukiapokhri', 'the detail is not lost — it still lands in Area/locality');
+});
+
+await test('a suburb/neighbourhood tag is preferred as locality over county/state when both exist', () => {
+  const candidate = candidateWithAddress({
+    name: 'Chowrasta',
+    address: { suburb: 'Mall Road', city: 'Darjeeling', county: 'Darjeeling district', state: 'West Bengal' },
+  });
+  const place = buildConfirmedPlace(candidate, 'Darjeeling');
+  assert.equal(place.locality, 'Mall Road', 'a genuine sub-city tag is more useful than the broader county/state fallback');
+});
+
+await test("when the provider's own city-level guess differs from the known context, that detail is preserved in locality rather than silently dropped", () => {
+  const candidate = candidateWithAddress({
+    name: 'Batasia Loop',
+    address: { town: 'Ghoom', country: 'India' }, // provider says "Ghoom", but the record is scoped to "Darjeeling" city
+  });
+  const place = buildConfirmedPlace(candidate, 'Darjeeling');
+  assert.equal(place.city, 'Darjeeling', 'the established Dossier City always wins');
+  assert.equal(place.locality, 'Ghoom', "the provider's differing detail is not thrown away — it becomes Area context instead");
+});
+
+await test('no Dossier City change ever happens implicitly — buildConfirmedPlace only ever returns a free-text city/locality string, never a locationId', () => {
+  const candidate = candidateWithAddress({ name: 'Tiger Hill', address: { county: 'Somewhere Rural', state: 'Some State' } });
+  const place = buildConfirmedPlace(candidate, 'Darjeeling');
+  assert.ok(!('locationId' in place), 'this function must never touch/create a real Dossier City record — only components/AddEntry.jsx\'s explicit "Other / Add new city" flow does that');
 });
 
 console.log('\n6. Confirmed-result local cache (unchanged by the Wikidata+Nominatim merge)');

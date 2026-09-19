@@ -48,14 +48,60 @@ const MIN_MS_BETWEEN_REQUESTS = 1200;
 let lastRequestAt = 0;
 
 /**
- * Builds the contextual query Nominatim (and the Google Maps hand-off)
- * both use: "<name>, <city/location>, <country/destination>" — omitting
- * any part that's blank. This is the ONLY place this string is built,
- * so the two lookups (OSM candidates + "Open in Google Maps") always
- * search for exactly the same thing.
+ * Given the name as typed, returns progressively shorter fallback
+ * variants by dropping ONE trailing word at a time — e.g. "Tiger Hill
+ * Observatory" -> ["Tiger Hill"] (stops before reducing to a single
+ * word only if there's already just one). This exists because both
+ * providers match against their own indexed name/label text
+ * (Nominatim: OSM name/alt_name tags; Wikidata's wbsearchentities: a
+ * prefix match against labels/aliases — see fetchWikidataCandidates
+ * above) rather than doing open-ended natural-language search: a
+ * genuinely real, correctly-named place ("Tiger Hill") can return
+ * ZERO results for a query that adds a plausible-sounding but
+ * unindexed extra word ("Tiger Hill Observatory" — "Observatory" is a
+ * colloquial description of the viewpoint atop the hill, not part of
+ * its indexed name in either source).
+ *
+ * This is a controlled, well-reasoned fallback, not fuzzy matching:
+ * every variant is still an exact, literal query sent to the same
+ * real providers — nothing is invented, and the ranking step
+ * afterwards still scores each real result against the FULL name the
+ * person actually typed (see lookupPlace below), so an unrelated
+ * result that happens to match a shortened query still has to earn
+ * its rank normally; it is never accepted blindly.
+ */
+export function buildFallbackNames(name) {
+  const words = (name || '').trim().split(/\s+/).filter(Boolean);
+  const variants = [];
+  for (let end = words.length - 1; end >= 1; end--) {
+    variants.push(words.slice(0, end).join(' '));
+  }
+  return variants;
+}
+
+/**
+ * Builds the contextual query Nominatim uses: "<name>, <city/location>,
+ * <country/destination>" — omitting any part that's blank, AND
+ * collapsing a part that's the same place as one already included
+ * (case-insensitively) so a destination and city that share a name
+ * (e.g. destination "Darjeeling" + city "Darjeeling") don't produce a
+ * redundant "Glenary's, Darjeeling, Darjeeling" query — a repeated
+ * term adds nothing for Nominatim to match against and, in practice,
+ * only risks diluting/confusing its matching versus the same query
+ * written once. This is the ONE place this string is built.
  */
 export function buildContextualQuery({ name, locationName, destinationName }) {
-  return [name, locationName, destinationName].map(s => (s || '').trim()).filter(Boolean).join(', ');
+  const parts = [];
+  const seen = new Set();
+  for (const raw of [name, locationName, destinationName]) {
+    const s = (raw || '').trim();
+    if (!s) continue;
+    const key = s.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    parts.push(s);
+  }
+  return parts.join(', ');
 }
 
 /**
@@ -101,6 +147,80 @@ function normalizeWikidataResult(entity, matchedLabel) {
     addressCountry: '',
     osmClass: null,
     importance: 0, // no equivalent signal — never fabricated
+  };
+}
+
+/**
+ * Turns a SELECTED candidate (already ranked/displayed by lookupPlace)
+ * into the { name, locality, city, lat, lng } shape saved onto the
+ * record's `place` field — this is a separate, deliberately narrow
+ * step from ranking: ranking's `addressCity` (see
+ * normalizeNominatimResult above) is an internal, intentionally loose
+ * blob of every administrative level Nominatim returned (city, town,
+ * village, county, state all concatenated) — good enough for a
+ * "does this candidate look like it's roughly in the right place?"
+ * ranking heuristic, but never meant to be shown or saved as a clean
+ * city name. Using it directly as the saved city produced results
+ * like "Rangli Rangliot Jorebunglow Sukiapokhri West Bengal" for a
+ * remote hilltop with no city/town/village tag of its own — a
+ * genuine bug, not a one-off.
+ *
+ * `knownCityName`, when provided, is the CITY ALREADY ESTABLISHED BY
+ * THE USER'S CURRENT DOSSIER CONTEXT (the City the Add flow/section
+ * page is already scoped to — see LocationScopeField.jsx and how
+ * AttractionsPage.jsx passes `locationName` down to PlaceField ->
+ * PlaceLookup). This is the generic mechanism the requirement asks
+ * for: it works for ANY destination/city, not just Darjeeling,
+ * because it's driven entirely by whatever city context the caller
+ * already has — nothing here is hardcoded to a specific place name.
+ * When known, it is ALWAYS preferred over the geocoder's own city
+ * guess, preserving the Dossier hierarchy the user already selected;
+ * only the provider's finer-grained locality detail (suburb,
+ * neighbourhood, or — for Nominatim results with no such tag, like a
+ * hilltop natural feature — the provider's own more specific address
+ * component below city level) is taken from the candidate, and it
+ * goes into `locality` (the existing "Area / locality" field), never
+ * into `city`. This never creates a new Dossier City record — `city`
+ * here is always the free-text field on the entry's `place` object,
+ * completely separate from the record's real locationId (see
+ * LocationScopeField.jsx) — so there's no risk of a provider string
+ * silently becoming a Dossier City.
+ *
+ * When no city context is known yet (e.g. the record isn't scoped to
+ * a specific city), this falls back to ONLY the genuine city-level
+ * Nominatim tags (city/town/village) — never county/state — so the
+ * saved city is either a real city-level place name or blank, never
+ * the noisy multi-level concatenation.
+ */
+export function buildConfirmedPlace(candidate, knownCityName) {
+  const addr = candidate.raw?.address || {};
+  // The most specific sub-city detail Nominatim offers, in descending
+  // specificity — whichever is present first. Falls through to the
+  // county/state level ONLY as a locality/Area value (never as city),
+  // since for a remote feature (a hilltop, a viewpoint) that may be
+  // the only geographic detail available at all, and it's still more
+  // useful there than nowhere.
+  const fineLocality = addr.suburb || addr.neighbourhood || addr.village || addr.hamlet || addr.county || addr.state || '';
+  const providerCityLevel = addr.city || addr.town || addr.village || '';
+
+  const knownCity = (knownCityName || '').trim();
+  const city = knownCity || providerCityLevel;
+
+  // If we're using the known Dossier city, and the provider's
+  // city-level guess is something different and more specific (e.g.
+  // the provider found a town/village distinct from the broader city
+  // context), surface that as locality too, so nothing the provider
+  // told us is silently discarded — it just doesn't overwrite the
+  // established City.
+  const providerCityDiffersFromKnown = knownCity && providerCityLevel && providerCityLevel.toLowerCase() !== knownCity.toLowerCase();
+  const locality = providerCityDiffersFromKnown && !fineLocality ? providerCityLevel : fineLocality;
+
+  return {
+    name: candidate.name,
+    locality,
+    city,
+    lat: candidate.lat,
+    lng: candidate.lng,
   };
 }
 
@@ -298,13 +418,53 @@ async function fetchWikidataCandidates(name, fetchImpl, signal) {
 
 /**
  * Fires both lookups (Wikidata first-pass for alias-aware recall,
+ * Nominatim for structured geographic context) in parallel for ONE
+ * specific name/query pair. Returns the raw per-source
+ * fulfilled/rejected settlement so the caller (lookupPlace) can
+ * decide how to interpret a "both empty" outcome (genuine zero
+ * results vs. a real network failure) without re-fetching.
+ */
+async function fetchRound(name, query, fetchImpl, signal) {
+  const [nominatimResult, wikidataResult] = await Promise.allSettled([
+    fetchNominatimCandidates(query, fetchImpl, signal),
+    fetchWikidataCandidates(name, fetchImpl, signal),
+  ]);
+  return {
+    nominatimResult,
+    wikidataResult,
+    nominatimCandidates: nominatimResult.status === 'fulfilled' ? nominatimResult.value : [],
+    wikidataCandidates: wikidataResult.status === 'fulfilled' ? wikidataResult.value : [],
+  };
+}
+
+/**
+ * Fires both lookups (Wikidata first-pass for alias-aware recall,
  * Nominatim for structured geographic context) in parallel, merges and
  * deduplicates the results, and ranks the merged set with the same
  * uniform scoring used for a single source — see rankCandidates() and
  * mergeCandidates() above for the important guarantee that a Wikidata
  * hit earns its rank, never gets it for free.
  *
- * Returns { candidates, error }. NEVER throws — a network failure,
+ * If the exact name as typed returns nothing from EITHER source (not a
+ * failure — a genuine zero-result search), this retries with
+ * progressively shorter fallback names (see buildFallbackNames above)
+ * — e.g. "Tiger Hill Observatory" retries as "Tiger Hill" — stopping
+ * at the first variant that returns any real candidates. This is a
+ * controlled retry against the same two real providers, not fuzzy
+ * matching: it never invents a result, and every candidate returned
+ * this way is still ranked normally against the FULL original name
+ * (see rankCandidates() below), so an unrelated place that happens to
+ * share the shortened query's words still has to earn its rank on
+ * name similarity/location/category like any other candidate —
+ * matching a shortened query is not the same as being accepted. A
+ * fallback round is skipped entirely once any round (primary or
+ * fallback) succeeds.
+ *
+ * Returns { candidates, error, matchedName }. `matchedName` is the
+ * exact name variant that actually produced results (the original
+ * name, unless a fallback variant is what succeeded) — purely
+ * informational for callers/tests; ranking and the returned
+ * candidates are unaffected by which variant matched. NEVER throws —
  * timeout, non-2xx response, or malformed response from EITHER OR BOTH
  * sources resolves to a graceful outcome: if one source fails but the
  * other succeeds, the lookup still returns useful candidates from
@@ -326,20 +486,40 @@ export async function lookupPlace({ name, locationName, destinationName, expecte
 
   try {
     lastRequestAt = now();
-    const [nominatimResult, wikidataResult] = await Promise.allSettled([
-      fetchNominatimCandidates(query, fetchImpl, controller?.signal),
-      fetchWikidataCandidates(name, fetchImpl, controller?.signal),
-    ]);
 
-    const nominatimCandidates = nominatimResult.status === 'fulfilled' ? nominatimResult.value : [];
-    const wikidataCandidates = wikidataResult.status === 'fulfilled' ? wikidataResult.value : [];
+    // Try the exact name as typed first, then — only if that round is
+    // a genuine zero-result outcome from both sources, not a failure
+    // — progressively shorter fallback variants. See buildFallbackNames.
+    const attempts = [{ attemptName: name, query }, ...buildFallbackNames(name).map(fallbackName => ({
+      attemptName: fallbackName,
+      query: buildContextualQuery({ name: fallbackName, locationName, destinationName }),
+    }))];
+
+    let lastRound = null;
+    let matchedName = name;
+    for (const attempt of attempts) {
+      const round = await fetchRound(attempt.attemptName, attempt.query, fetchImpl, controller?.signal);
+      lastRound = round;
+      if (round.nominatimCandidates.length > 0 || round.wikidataCandidates.length > 0) {
+        matchedName = attempt.attemptName;
+        break;
+      }
+      // Both sources failed outright (not just empty) — stop retrying
+      // with fallback variants; a real network/timeout failure won't
+      // be fixed by trying a shorter name, and retrying would just
+      // multiply the same failure across several requests.
+      if (round.nominatimResult.status === 'rejected' && round.wikidataResult.status === 'rejected') break;
+    }
+
+    const { nominatimCandidates, wikidataCandidates, nominatimResult, wikidataResult } = lastRound;
 
     if (nominatimCandidates.length === 0 && wikidataCandidates.length === 0) {
-      // Both sources returned nothing usable. Distinguish "both
-      // genuinely found zero results" (not an error) from "both
-      // actually failed" (network/parse issues) so the person sees an
-      // accurate message either way — but in both cases, manual entry
-      // remains fully available; this is never a blocking failure.
+      // Both sources returned nothing usable, even after any fallback
+      // attempts. Distinguish "both genuinely found zero results" (not
+      // an error) from "both actually failed" (network/parse issues)
+      // so the person sees an accurate message either way — but in
+      // both cases, manual entry remains fully available; this is
+      // never a blocking failure.
       const bothRejected = nominatimResult.status === 'rejected' && wikidataResult.status === 'rejected';
       if (bothRejected) {
         const err = nominatimResult.reason;
@@ -350,8 +530,14 @@ export async function lookupPlace({ name, locationName, destinationName, expecte
     }
 
     const merged = mergeCandidates(wikidataCandidates, nominatimCandidates);
+    // Ranking always scores against the FULL name the person actually
+    // typed, even when a shortened fallback variant is what produced
+    // results — a candidate found via the "Tiger Hill" fallback still
+    // has to earn its rank against "Tiger Hill Observatory" like any
+    // other candidate, not get a free pass for matching a truncated
+    // query.
     const ranked = rankCandidates(merged, { name, locationName, destinationName, expectedCategory });
-    return { candidates: ranked, error: null };
+    return { candidates: ranked, error: null, matchedName };
   } catch (err) {
     const reason = err?.name === 'AbortError' ? 'The lookup timed out.' : 'Could not reach the lookup service (offline or network error).';
     return { candidates: [], error: `${reason} You can still enter the place manually.` };
