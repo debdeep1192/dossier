@@ -22,7 +22,7 @@ import './AddEntry.css';
 // full section page are therefore now the SAME form, not two different
 // ones.
 
-export default function AddEntry({ open, onClose, initialDestinationId, initialLocationId, initialSection }) {
+export default function AddEntry({ open, onClose, initialDestinationId, initialLocationId }) {
   const navigate = useNavigate();
   const [step, setStep] = useState('type'); // 'type' | 'context'
   const [selectedSection, setSelectedSection] = useState(null);
@@ -44,27 +44,17 @@ export default function AddEntry({ open, onClose, initialDestinationId, initialL
   }
 
   // Case A ("Destination -> City -> Section", e.g. already on the
-  // Attractions page): the section is already known too, not just the
-  // destination/location — skip both the type picker AND the context
-  // picker entirely and go straight to that section's real form, the
-  // same form its own in-page "+ Add" button opens. See
-  // matchCurrentSection() in lib/addEntryRouting.js for how the
-  // caller (AppShell.jsx) detects this from the current URL.
-  useEffect(() => {
-    if (open && initialSection) {
-      goToSection(initialSection, initialDestinationId, initialLocationId);
-    }
-    // Only re-run when the modal is actually (re)opened or the
-    // detected section changes — not on every render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, initialSection]);
+  // Attractions page) is now decided and acted on BEFORE this modal is
+  // ever opened — see AppShell.jsx's openAdd(), which navigates
+  // directly instead of opening this component at all in that case.
+  // This modal therefore only ever needs to handle Case B (destination
+  // and/or city already known, city missing) and Case C (nothing known
+  // yet) below.
 
   function handleSelectSection(section) {
     if (initialDestinationId !== undefined && initialLocationId) {
       // Case B with a specific city already selected — context fully
-      // known, go straight to the section. (Case A itself never
-      // reaches here: it's handled by the useEffect above, before the
-      // type step ever renders.)
+      // known, go straight to the section.
       goToSection(section, initialDestinationId, initialLocationId);
       return;
     }
@@ -76,7 +66,7 @@ export default function AddEntry({ open, onClose, initialDestinationId, initialL
     setStep('context');
   }
 
-  if (!open || initialSection) return null;
+  if (!open) return null;
 
   return (
     <Modal open={open} onClose={handleClose} title="Add to Dossier">

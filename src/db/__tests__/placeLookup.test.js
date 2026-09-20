@@ -697,5 +697,77 @@ await test('writing to the cache with no storage available never throws', () => 
   assert.doesNotThrow(() => setCachedConfirmedResult({ name: 'Ganesh Temple' }, { name: 'Ganesh Temple' }, { storage: null }));
 });
 
+console.log('\n6b. Cache versioning — a stale entry from the OLD (pre-buildConfirmedPlace) City/Area bug cannot resurface');
+
+await test("a raw entry written under the OLD, unversioned cache key is never read back — it's a clean miss, not the stale value", () => {
+  const storage = makeMemoryStorage();
+  // Simulates what earlier app code actually wrote to a real
+  // person's localStorage: the OLD key format (no version segment)
+  // holding the OLD buggy shape, where `city` was Nominatim's raw
+  // multi-level admin-area concatenation instead of the preserved
+  // Dossier City.
+  storage.setItem(
+    'dossier:placeLookupConfirmed:tiger hill, darjeeling',
+    JSON.stringify({ name: 'Tiger Hill', locality: '', city: 'Rangli Rangliot Jorebunglow Sukiapokhri West Bengal', lat: 27.01, lng: 88.26 }),
+  );
+  const result = getCachedConfirmedResult({ name: 'Tiger Hill', locationName: 'Darjeeling' }, { storage });
+  assert.equal(result, null, 'a lookup under the CURRENT versioned key must not find the old-key entry at all — it should behave exactly like an ordinary cache miss');
+});
+
+await test('a raw entry that exists under the CURRENT key prefix but lacks a valid/matching version stamp is also rejected, not trusted', () => {
+  const storage = makeMemoryStorage();
+  // Same current key prefix as a real v2 entry, but the stored value
+  // itself carries no matching __cacheVersion — e.g. a value written
+  // by some other/older logic that happened to reuse this key, or a
+  // future format this version of the code doesn't understand yet.
+  storage.setItem(
+    'dossier:placeLookupConfirmed:v2:tiger hill, darjeeling',
+    JSON.stringify({ name: 'Tiger Hill', city: 'Rangli Rangliot Jorebunglow Sukiapokhri West Bengal' }), // no __cacheVersion at all
+  );
+  const result = getCachedConfirmedResult({ name: 'Tiger Hill', locationName: 'Darjeeling' }, { storage });
+  assert.equal(result, null, 'missing/mismatched version stamp must be treated as untrustworthy, not silently accepted');
+});
+
+await test('after a stale-cache miss, the normal lookup path is free to run again and produce a CORRECT result via buildConfirmedPlace', () => {
+  const storage = makeMemoryStorage();
+  storage.setItem(
+    'dossier:placeLookupConfirmed:tiger hill, darjeeling', // old key, ignored entirely by current code
+    JSON.stringify({ name: 'Tiger Hill', city: 'Rangli Rangliot Jorebunglow Sukiapokhri West Bengal' }),
+  );
+  assert.equal(getCachedConfirmedResult({ name: 'Tiger Hill', locationName: 'Darjeeling' }, { storage }), null);
+  // Confirms the caller (PlaceLookup.jsx's handleFindPlace) is left to
+  // do a real lookupPlace() + buildConfirmedPlace() in this situation,
+  // exactly as it does on any other cache miss — no special-casing
+  // required elsewhere for this to be safe, and the fix from Part 3
+  // (buildConfirmedPlace preserving the known Dossier City) still
+  // applies normally afterward.
+  const freshResult = buildConfirmedPlace(
+    { name: 'Tiger Hill', lat: 27.01, lng: 88.26, raw: { address: { county: 'Rangli Rangliot Jorebunglow Sukiapokhri', state: 'West Bengal' } } },
+    'Darjeeling',
+  );
+  assert.equal(freshResult.city, 'Darjeeling', 'once the stale entry is ignored, a fresh confirmation correctly preserves the known Dossier City');
+  assert.equal(freshResult.locality, 'Rangli Rangliot Jorebunglow Sukiapokhri');
+});
+
+await test('a NEW confirmation is written under the versioned key and round-trips correctly, including through the exact Tiger Hill scenario', () => {
+  const storage = makeMemoryStorage();
+  const place = buildConfirmedPlace(
+    { name: 'Tiger Hill', lat: 27.01, lng: 88.26, raw: { address: { county: 'Rangli Rangliot Jorebunglow Sukiapokhri', state: 'West Bengal' } } },
+    'Darjeeling',
+  );
+  setCachedConfirmedResult({ name: 'Tiger Hill', locationName: 'Darjeeling' }, place, { storage });
+  const cached = getCachedConfirmedResult({ name: 'Tiger Hill', locationName: 'Darjeeling' }, { storage });
+  assert.deepEqual(cached, place, 'a correctly-versioned round trip must return exactly what was written, with the version stamp invisible to the caller');
+  assert.equal(cached.city, 'Darjeeling');
+  assert.notEqual(cached.city, 'Rangli Rangliot Jorebunglow Sukiapokhri West Bengal');
+});
+
+await test('an unrelated localStorage key (not this cache at all) is left completely alone by a get/set cycle', () => {
+  const storage = makeMemoryStorage();
+  storage.setItem('someOtherApp:unrelatedKey', 'do-not-touch');
+  setCachedConfirmedResult({ name: 'Ganesh Temple' }, { name: 'Ganesh Temple' }, { storage });
+  assert.equal(storage.getItem('someOtherApp:unrelatedKey'), 'do-not-touch', 'this cache must never read, write, or otherwise disturb keys outside its own prefix');
+});
+
 console.log(`\n=== ${passed} passed, ${failed} failed ===\n`);
 if (failed > 0) process.exit(1);

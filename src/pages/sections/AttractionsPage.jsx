@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { useAutoOpenNewForm } from '../../hooks/useAutoOpenNewForm';
 import { getDestination } from '../../db/stores/destinations';
@@ -138,6 +138,22 @@ function AttractionForm({ destinationId, destinationName, record, currencies, de
   const base = record || emptyAttraction();
   const [place, setPlace] = useState(base.place || {});
   const [locationId, setLocationId] = useState(base.locationId ?? contextLocationId ?? null);
+  // Belt-and-braces alongside the useState initializer above: for a
+  // BRAND NEW record only (never an existing one being edited — an
+  // existing record's own saved locationId must never be silently
+  // overwritten by whatever the page's current ?location= happens to
+  // be), keep locationId synced to contextLocationId for the lifetime
+  // of this form. useState's initializer only runs once, at mount; if
+  // this form were ever mounted before contextLocationId reflects its
+  // final value (e.g. an app-shell/router update landing in a
+  // different commit than this component's own mount), the initial
+  // state alone could miss it. This effect closes that gap
+  // unconditionally rather than relying on both values always being
+  // derived in exactly the same render pass.
+  useEffect(() => {
+    if (!record) setLocationId(contextLocationId ?? null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contextLocationId]);
   const [journeyId, setJourneyId] = useState(base.journeyId || null);
   const [localJourneys, setLocalJourneys] = useState(journeys);
   const [category, setCategory] = useState(base.category || '');

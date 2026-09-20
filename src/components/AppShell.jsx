@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { Link, NavLink, Outlet, useMatch, useSearchParams } from 'react-router-dom';
+import { Link, NavLink, Outlet, useMatch, useSearchParams, useNavigate } from 'react-router-dom';
 import AddEntry from './AddEntry';
 import { SECTIONS } from '../sectionRegistry.js';
-import { matchCurrentSection } from '../lib/addEntryRouting.js';
+import { matchCurrentSection, buildAddDestinationPath } from '../lib/addEntryRouting.js';
 import { AddEntryProvider } from '../lib/addEntryContext.js';
 import './AppShell.css';
 
@@ -16,6 +16,7 @@ const NAV_ITEMS = [
 // previous Dossier.
 export default function AppShell({ children }) {
   const [addOpen, setAddOpen] = useState(false);
+  const navigate = useNavigate();
 
   // AppShell wraps <Routes> in App.jsx rather than being rendered inside
   // a <Route> via <Outlet>, so it can't use useParams() to pick up
@@ -33,21 +34,48 @@ export default function AppShell({ children }) {
   // Case A detection: are we already ON a specific section's own page
   // (e.g. /destinations/abc/attractions)? If so, the single Add entry
   // point should skip straight to that section's real form — see
-  // matchCurrentSection() in lib/addEntryRouting.js and AddEntry.jsx's
-  // initialSection handling.
+  // matchCurrentSection() in lib/addEntryRouting.js.
   const currentSection = matchCurrentSection(destinationMatch?.pathname, currentDestinationId, SECTIONS);
 
+  // Deciding and acting on Case A HERE, synchronously, in the same
+  // render/click that has currentDestinationId/currentLocationId
+  // freshly computed — not via a useEffect inside AddEntry reacting to
+  // props after the fact — removes any possibility of navigating with
+  // a stale/closed-over destination or location id. (The previous
+  // approach opened the modal and let an effect inside it detect
+  // Case A and redirect; that indirection is now unnecessary, since
+  // the section-page buttons that could trigger this are also the
+  // exact ones suppressed below whenever currentSection is set — see
+  // the !currentSection guards on the two buttons.) Case A can now
+  // only be reached through a button that is ONLY rendered when
+  // currentSection is truthy at the time it's clicked, so there is no
+  // stale-vs-fresh window to reason about at all.
+  function openAdd() {
+    if (currentSection) {
+      navigate(buildAddDestinationPath(currentSection, currentDestinationId, currentLocationId));
+      return;
+    }
+    setAddOpen(true);
+  }
+
   return (
-    <AddEntryProvider value={() => setAddOpen(true)}>
+    <AddEntryProvider value={openAdd}>
       <div className="app-shell">
         <aside className="app-shell__sidebar">
           <Link to="/" className="app-shell__brand">
             <span className="app-shell__brand-mark">D</span>
             <span className="app-shell__brand-name">Dossier</span>
           </Link>
-          <button type="button" className="app-shell__quick-add" onClick={() => setAddOpen(true)}>
-            + Add to Dossier
-          </button>
+          {/* Suppressed when the current page already has its own
+              contextual "+ Add" (a section page's own header button —
+              see SectionPageLayout.jsx) so there is only ONE visible
+              Add affordance at a time, not two competing ones. See
+              currentSection above. */}
+          {!currentSection && (
+            <button type="button" className="app-shell__quick-add" onClick={openAdd}>
+              + Add to Dossier
+            </button>
+          )}
           <nav className="app-shell__sidebar-nav">
             {NAV_ITEMS.map(item => (
               <NavLink key={item.to} to={item.to} end className={({ isActive }) => `app-shell__sidebar-link ${isActive ? 'app-shell__sidebar-link--active' : ''}`}>
@@ -64,9 +92,16 @@ export default function AppShell({ children }) {
           </main>
         </div>
 
-        <button type="button" className="app-shell__fab" onClick={() => setAddOpen(true)} aria-label="Add to Dossier">
-          +
-        </button>
+        {/* Same suppression as the sidebar button above: a section
+            page's own header "+ Add" (SectionPageLayout.jsx) is
+            already the correct, contextual Add affordance for that
+            page — the floating button would just be a second,
+            redundant "+" on screen at the same time. */}
+        {!currentSection && (
+          <button type="button" className="app-shell__fab" onClick={openAdd} aria-label="Add to Dossier">
+            +
+          </button>
+        )}
 
         <nav className="app-shell__bottom-nav">
           {NAV_ITEMS.map(item => (
@@ -82,7 +117,6 @@ export default function AppShell({ children }) {
           onClose={() => setAddOpen(false)}
           initialDestinationId={currentDestinationId}
           initialLocationId={currentLocationId}
-          initialSection={currentSection}
         />
       </div>
     </AddEntryProvider>

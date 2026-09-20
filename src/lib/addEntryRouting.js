@@ -45,3 +45,20 @@ export function matchCurrentSection(pathname, destinationId, sections) {
   const rest = pathname.slice(prefix.length).replace(/\/+$/, '');
   return sections.find(s => s.path === rest) || null;
 }
+
+// Pure representation of the URL transformation
+// hooks/useAutoOpenNewForm.js applies once it has consumed `?new=1`:
+// the `new` flag is removed so refreshing/navigating back doesn't
+// re-open the form, but every OTHER param — critically `location`,
+// the Dossier City context this whole chain exists to carry — must
+// survive untouched. This is exercised directly (not just implied by
+// a component test this project's Node-only test runner can't run)
+// by db/__tests__/addEntry.test.js, tracing the full real chain:
+// matchCurrentSection -> buildAddDestinationPath -> (page loads) ->
+// consumeAutoOpenFlag -> confirm `location` is still there for
+// AttractionsPage's own contextLocationId to read.
+export function consumeAutoOpenFlag(search) {
+  const next = new URLSearchParams(search);
+  next.delete('new');
+  return next;
+}

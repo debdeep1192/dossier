@@ -554,18 +554,67 @@ export async function lookupPlace({ name, locationName, destinationName, expecte
 // Deliberately NOT a general query cache (which would risk serving
 // stale/wrong candidates); only ever populated by an explicit user
 // confirmation, read by callers that want to skip a redundant lookup.
-// ============================================================
-const CONFIRMED_CACHE_KEY_PREFIX = 'dossier:placeLookupConfirmed:';
+//
+// VERSIONING: the cached value's SHAPE is produced by
+// buildConfirmedPlace() — e.g. which field (city vs locality) a given
+// piece of provider data lands in. When that shape/logic changes (as
+// it did: earlier code could save a raw multi-level admin-area string
+// like "Rangli Rangliot Jorebunglow Sukiapokhri West Bengal" directly
+// into `city`; buildConfirmedPlace() now never does that), an entry
+// written by the OLD logic is not just "possibly out of date" the way
+// a normal cache entry is — it can actively reintroduce a bug that
+// was already fixed in the code, silently, forever, since
+// localStorage persists across app updates and isn't tied to any
+// build/version identifier on its own.
+//
+// CACHE_VERSION exists specifically to invalidate entries like that:
+// bumping it changes the key prefix, so every entry written under a
+// previous version is simply never looked up again — it is NOT
+// deleted (per the requirement to never touch unrelated localStorage
+// data; an old-prefix entry is left alone, inert, and will eventually
+// age out on its own as browsers reclaim storage, exactly like any
+// other unreachable key would), and a lookup under the new prefix is
+// a clean cache miss, which every caller already treats as a normal,
+// harmless "re-fetch" case — there is no special-casing needed
+// anywhere else for this to be safe. Bump this whenever
+// buildConfirmedPlace()'s output shape changes in a way that could
+// make an old cached value wrong under the CURRENT logic.
+const CACHE_VERSION = 2; // v2: buildConfirmedPlace() preserves known Dossier City / routes admin detail to locality instead of overwriting city (see buildConfirmedPlace above)
+const CONFIRMED_CACHE_KEY_PREFIX = `dossier:placeLookupConfirmed:v${CACHE_VERSION}:`;
 
 function cacheKey(name, locationName, destinationName) {
   return CONFIRMED_CACHE_KEY_PREFIX + buildContextualQuery({ name, locationName, destinationName }).toLowerCase();
+}
+
+// A second, independent layer of defense alongside the versioned key
+// prefix above: even if two different code versions ever shared a key
+// prefix (e.g. a hotfix that didn't bump CACHE_VERSION), a cached
+// value that doesn't carry ITS OWN matching version stamp, or that
+// doesn't look like a real buildConfirmedPlace() output at all (e.g.
+// hand-edited storage, a future format, or storage shared with
+// something else entirely), is treated as a miss rather than trusted
+// verbatim — the caller re-fetches exactly as if nothing were cached.
+function isValidCachedPlace(value) {
+  return Boolean(
+    value &&
+    typeof value === 'object' &&
+    value.__cacheVersion === CACHE_VERSION &&
+    typeof value.name === 'string',
+  );
 }
 
 export function getCachedConfirmedResult({ name, locationName, destinationName }, { storage = safeLocalStorage() } = {}) {
   if (!storage) return null;
   try {
     const raw = storage.getItem(cacheKey(name, locationName, destinationName));
-    return raw ? JSON.parse(raw) : null;
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!isValidCachedPlace(parsed)) return null; // stale/foreign shape — treat exactly like a cache miss, never trust it
+    // Strip the internal version stamp before handing the place back
+    // to callers — it's cache bookkeeping, not part of the actual
+    // place data (name/locality/city/lat/lng) they expect.
+    const { __cacheVersion, ...place } = parsed;
+    return place;
   } catch {
     return null;
   }
@@ -574,7 +623,7 @@ export function getCachedConfirmedResult({ name, locationName, destinationName }
 export function setCachedConfirmedResult({ name, locationName, destinationName }, confirmedPlace, { storage = safeLocalStorage() } = {}) {
   if (!storage) return;
   try {
-    storage.setItem(cacheKey(name, locationName, destinationName), JSON.stringify(confirmedPlace));
+    storage.setItem(cacheKey(name, locationName, destinationName), JSON.stringify({ ...confirmedPlace, __cacheVersion: CACHE_VERSION }));
   } catch {
     // Storage full/unavailable — caching is a convenience, never required. Fail silently.
   }
