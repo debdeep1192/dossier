@@ -40,9 +40,9 @@ export default function GeneralNotesPage() {
   const { destination, items } = data;
 
   return (
-    <SectionPageLayout destination={destination} destinationId={destinationId} title="General Notes" onAdd={() => setEditing({})}>
+    <SectionPageLayout destination={destination} destinationId={destinationId} title="General Notes">
       {items.length === 0 ? (
-        <EmptyState icon="📝" title="No general notes yet" description="Anything that doesn't fit the other sections." actionLabel="+ Add" onAction={() => setEditing({})} />
+        <EmptyState icon="📝" title="No general notes yet" description="Use the + button below — anything that doesn't fit the other sections." />
       ) : (
         items.map(item => (
           <Card key={item.id} interactive padding="sm" accentColor="var(--color-neutral-400)" className="entry-card" onClick={() => setEditing(item)}>

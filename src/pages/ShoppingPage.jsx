@@ -46,9 +46,9 @@ export default function ShoppingPage() {
   const { destination, items } = data;
 
   return (
-    <SectionPageLayout destination={destination} destinationId={destinationId} title="Shopping" onAdd={() => setEditingItem({})}>
+    <SectionPageLayout destination={destination} destinationId={destinationId} title="Shopping">
       {items.length === 0 ? (
-        <EmptyState icon="🛍️" title="Nothing to shop for yet" description="Start with what you want to buy, then add where you can buy it." actionLabel="+ Add" onAction={() => setEditingItem({})} />
+        <EmptyState icon="🛍️" title="Nothing to shop for yet" description="Use the + button below — start with what you want to buy, then add where you can buy it." />
       ) : (
         items.map(item => (
           <ShoppingItemCard

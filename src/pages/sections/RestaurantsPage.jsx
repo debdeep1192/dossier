@@ -94,8 +94,6 @@ export default function RestaurantsPage() {
       destinationId={destinationId}
       locationLabel={contextLocation?.name}
       title="Food & Restaurants"
-      onAdd={() => (activeTab === 'dishes' ? setEditingDish({}) : setEditingRestaurant({}))}
-      addLabel={activeTab === 'dishes' ? '+ Add Dish' : '+ Add Restaurant'}
     >
       <div className="food-tabs">
         <button type="button" className={`food-tabs__tab ${activeTab === 'restaurants' ? 'food-tabs__tab--active' : ''}`} onClick={() => setTab('restaurants')}>Restaurants</button>
@@ -157,7 +155,7 @@ export default function RestaurantsPage() {
 
 function RestaurantsTab({ destination, restaurants, dishes, onEdit, onDelete }) {
   if (restaurants.length === 0) {
-    return <EmptyState icon="🍽️" title="Nothing here yet" description="Add a specific restaurant, or a general food/dish note." actionLabel="+ Add" onAction={() => onEdit({})} />;
+    return <EmptyState icon="🍽️" title="Nothing here yet" description="Use the + button below to add a specific restaurant, or a general food/dish note." />;
   }
   return restaurants.map(item => {
     const linkedDishes = dishes.filter(d => d.restaurantIds.includes(item.id));
@@ -190,7 +188,7 @@ function DishesTab({ dishes, restaurants, locations, contextLocationId, onEdit, 
   const restaurantById = Object.fromEntries(restaurants.map(r => [r.id, r]));
 
   if (visibleItems.length === 0) {
-    return <EmptyState icon="🍜" title="No dishes yet" description="A dish worth remembering, even before you know the best restaurant for it — e.g. Momos in Darjeeling." actionLabel="+ Add" onAction={() => onEdit({})} />;
+    return <EmptyState icon="🍜" title="No dishes yet" description="Use the + button below — a dish worth remembering, even before you know the best restaurant for it, e.g. Momos in Darjeeling." />;
   }
   return visibleItems.map(item => (
     <Card key={item.id} interactive padding="sm" accentColor="var(--color-teal)" className="entry-card" onClick={() => onEdit(item)}>

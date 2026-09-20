@@ -70,10 +70,25 @@ export default function PracticalInfoPage() {
     const topicEntries = entriesByTopic[openTopic] || [];
     const isCustomTopicName = !PRACTICAL_INFO_TOPICS.includes(openTopic);
     return (
-      <SectionPageLayout destination={destination} destinationId={destinationId} title={`Practical Info — ${openTopic}`} onAdd={() => setEditing({})}>
-        <Button variant="ghost" size="sm" onClick={() => setOpenTopic(null)} style={{ marginBottom: 'var(--space-3)' }}>← All topics</Button>
+      <SectionPageLayout destination={destination} destinationId={destinationId} title={`Practical Info — ${openTopic}`}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-3)', gap: 'var(--space-2)' }}>
+          <Button variant="ghost" size="sm" onClick={() => setOpenTopic(null)}>← All topics</Button>
+          {/* Practical Info is topic-scoped: the single global bottom-right
+              "+ Add" (AppShell.jsx) intentionally does NOT auto-open a form
+              for this section (see SECTIONS_WITHOUT_AUTO_OPEN in
+              lib/addEntryRouting.js) since there's no single "new entry"
+              without first picking which topic it belongs to — that's what
+              choosing a topic tile on the grid view already does. Once
+              inside a topic, though, this button is the only way to add a
+              second/third entry (the EmptyState below only offers one when
+              the topic is still empty), so it stays as this topic view's
+              own local action rather than being removed as a "competing"
+              button — it does something the global Add cannot do
+              (pick a specific existing topic to add into). */}
+          <Button size="sm" onClick={() => setEditing({})}>+ Add to {openTopic}</Button>
+        </div>
         {topicEntries.length === 0 ? (
-          <EmptyState icon={PRACTICAL_INFO_TOPIC_ICONS[openTopic] || '🛂'} title={`No ${openTopic} info yet`} description="Add what's useful to remember." actionLabel="+ Add" onAction={() => setEditing({})} />
+          <EmptyState icon={PRACTICAL_INFO_TOPIC_ICONS[openTopic] || '🛂'} title={`No ${openTopic} info yet`} description="Use the button above to add what's useful to remember." />
         ) : (
           topicEntries.map(item => (
             <Card key={item.id} interactive padding="sm" accentColor="var(--color-teal-dark)" className="entry-card" onClick={() => setEditing(item)}>

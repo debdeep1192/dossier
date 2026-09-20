@@ -75,9 +75,9 @@ export default function AttractionsPage() {
   const visibleItems = contextLocationId ? items.filter(i => i.locationId === contextLocationId) : items;
 
   return (
-    <SectionPageLayout destination={destination} destinationId={destinationId} locationLabel={contextLocation?.name} title="Attractions & Activities" onAdd={() => setEditing({})}>
+    <SectionPageLayout destination={destination} destinationId={destinationId} locationLabel={contextLocation?.name} title="Attractions & Activities">
       {visibleItems.length === 0 ? (
-        <EmptyState icon="🏛️" title="No attractions yet" description="Add sights, landmarks, tours, or experiences you're researching." actionLabel="+ Add" onAction={() => setEditing({})} />
+        <EmptyState icon="🏛️" title="No attractions yet" description="Use the + button below to add sights, landmarks, tours, or experiences you're researching." />
       ) : (
         visibleItems.map(item => (
           <Card key={item.id} interactive padding="sm" accentColor="var(--color-teal)" className="entry-card" onClick={() => setEditing(item)}>
@@ -136,7 +136,29 @@ export default function AttractionsPage() {
 // link field below is unchanged from Phase 1 in the meantime.
 function AttractionForm({ destinationId, destinationName, record, currencies, defaultCurrency, locations, journeys, contextLocationId, onAddCurrency, onClose, onSaved }) {
   const base = record || emptyAttraction();
-  const [place, setPlace] = useState(base.place || {});
+  const [place, setPlace] = useState(() => {
+    // For a brand-new record with a known Dossier city context, the
+    // Place sub-form's own free-text "City" field (place.city — see
+    // components/Place.jsx's PlaceField, a display/address string that
+    // is completely separate from locationId below) should start out
+    // already containing that city's real Dossier name, instead of
+    // blank — the person shouldn't have to retype what the app already
+    // knows just because it lives in a different field than the
+    // "Applies to" location picker. This uses the actual Dossier
+    // Location record's name (resolved from contextLocationId via the
+    // `locations` list already passed into this form), never provider
+    // geocoder text and never any hardcoded place name — so this works
+    // identically for any destination/city, not just Darjeeling. An
+    // EXISTING record's own saved place.city is never touched here;
+    // this initializer only ever runs once, at mount, and only fills
+    // in a value that starts genuinely empty.
+    const basePlace = base.place || {};
+    if (!record && !basePlace.city && contextLocationId) {
+      const contextLocationName = locations.find(l => l.id === contextLocationId)?.name;
+      if (contextLocationName) return { ...basePlace, city: contextLocationName };
+    }
+    return basePlace;
+  });
   const [locationId, setLocationId] = useState(base.locationId ?? contextLocationId ?? null);
   // Belt-and-braces alongside the useState initializer above: for a
   // BRAND NEW record only (never an existing one being edited — an
@@ -152,6 +174,19 @@ function AttractionForm({ destinationId, destinationName, record, currencies, de
   // derived in exactly the same render pass.
   useEffect(() => {
     if (!record) setLocationId(contextLocationId ?? null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contextLocationId]);
+  // Same belt-and-braces reasoning as the locationId effect above,
+  // applied to place.city: only for a new record, only filling in a
+  // still-empty city, and only re-running if contextLocationId itself
+  // changes (never on every keystroke — this effect does not depend on
+  // `place`/`place.city`, so it can't fight or overwrite anything the
+  // person subsequently types into the City field).
+  useEffect(() => {
+    if (record || !contextLocationId) return;
+    const contextLocationName = locations.find(l => l.id === contextLocationId)?.name;
+    if (!contextLocationName) return;
+    setPlace(prev => (prev.city ? prev : { ...prev, city: contextLocationName }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contextLocationId]);
   const [journeyId, setJourneyId] = useState(base.journeyId || null);

@@ -66,9 +66,9 @@ export default function TransportPage() {
   const visibleItems = contextLocationId ? items.filter(i => i.locationId === contextLocationId) : items;
 
   return (
-    <SectionPageLayout destination={destination} destinationId={destinationId} locationLabel={contextLocation?.name} title="Transport" onAdd={() => setEditing({})}>
+    <SectionPageLayout destination={destination} destinationId={destinationId} locationLabel={contextLocation?.name} title="Transport">
       {visibleItems.length === 0 ? (
-        <EmptyState icon="🚌" title="No transport yet" description="Add how to get between places, or how to get around locally — buses, trains, flights, taxis, local apps." actionLabel="+ Add" onAction={() => setEditing({})} />
+        <EmptyState icon="🚌" title="No transport yet" description="Use the + button below to add how to get between places, or how to get around locally — buses, trains, flights, taxis, local apps." />
       ) : (
         visibleItems.map(item => (
           <Card key={item.id} interactive padding="sm" accentColor="var(--color-neutral-500)" className="entry-card" onClick={() => setEditing(item)}>

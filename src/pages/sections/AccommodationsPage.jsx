@@ -64,9 +64,9 @@ export default function AccommodationsPage() {
   const visibleItems = contextLocationId ? items.filter(i => i.locationId === contextLocationId) : items;
 
   return (
-    <SectionPageLayout destination={destination} destinationId={destinationId} locationLabel={contextLocation?.name} title="Accommodation" onAdd={() => setEditing({})}>
+    <SectionPageLayout destination={destination} destinationId={destinationId} locationLabel={contextLocation?.name} title="Accommodation">
       {visibleItems.length === 0 ? (
-        <EmptyState icon="🛏️" title="No accommodation yet" description="Add hotels, guesthouses, or homestays you're researching." actionLabel="+ Add" onAction={() => setEditing({})} />
+        <EmptyState icon="🛏️" title="No accommodation yet" description="Use the + button below to add hotels, guesthouses, or homestays you're researching." />
       ) : (
         visibleItems.map(item => (
           <Card key={item.id} interactive padding="sm" accentColor="var(--color-saffron-dark)" className="entry-card" onClick={() => setEditing(item)}>

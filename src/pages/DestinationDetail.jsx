@@ -8,7 +8,6 @@ import Card from '../components/Card';
 import Button from '../components/Button';
 import { Input } from '../components/Field';
 import { LoadingState, ErrorState, EmptyState } from '../components/States';
-import { useOpenAddEntry } from '../lib/addEntryContext.js';
 import './DestinationDetail.css';
 
 // The destination page has two primary tabs (Chunk 10):
@@ -31,7 +30,6 @@ export default function DestinationDetail() {
   const activeLocationId = searchParams.get('location') || '';
   const activeTab = TABS.includes(searchParams.get('tab')) ? searchParams.get('tab') : 'cities';
   const [managingLocations, setManagingLocations] = useState(false);
-  const openAddEntry = useOpenAddEntry();
 
   const fetcher = useCallback(async () => {
     const destination = await getDestination(destinationId);
@@ -136,7 +134,6 @@ export default function DestinationDetail() {
           counts={counts}
           sectionHref={sectionHref}
           navigate={navigate}
-          onAdd={openAddEntry}
         />
       )}
     </div>
@@ -239,7 +236,7 @@ function CitiesTab({ destinationId, locations, managing, onToggleManaging, onOpe
 // the section counts/links unfiltered — since every section page
 // already treats an absent ?location= as "show everything", this is
 // simply the existing default behaviour, not new filtering logic.
-function ResearchTab({ destinationId, locations, activeLocationId, onSelectLocation, counts, sectionHref, navigate, onAdd }) {
+function ResearchTab({ destinationId, locations, activeLocationId, onSelectLocation, counts, sectionHref, navigate }) {
   const activeLocation = locations.find(l => l.id === activeLocationId) || null;
 
   // "Food & Restaurants" groups the Restaurants and Dishes sections
@@ -281,10 +278,6 @@ function ResearchTab({ destinationId, locations, activeLocationId, onSelectLocat
       {activeLocation && (
         <p className="research-tab__scope-hint">Showing research for {activeLocation.name}. Destination-wide research is included under "All".</p>
       )}
-
-      <div className="dest-detail__actions">
-        <Button onClick={onAdd}>+ Add</Button>
-      </div>
 
       <div className="dest-detail__section-grid">
         <Card

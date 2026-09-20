@@ -96,10 +96,10 @@
   transform: scale(1.04);
 }
 
-/* Sidebar button: desktop only, hidden until the sidebar itself shows. */
-.app-shell__quick-add {
-  display: none;
-}
+/* Sidebar quick-add button removed: the single bottom-right floating
+   "+ Add" (see .app-shell__fab) is now the ONE Add affordance in every
+   context, so a second sidebar trigger would be exactly the kind of
+   competing control the single-Add-button requirement rules out. */
 
 /* ---- Desktop layout ---- */
 @media (min-width: 900px) {
@@ -148,24 +148,6 @@
     font-size: var(--text-lg);
   }
 
-  .app-shell__quick-add {
-    display: block;
-    width: 100%;
-    padding: var(--space-3);
-    margin-bottom: var(--space-4);
-    border: none;
-    border-radius: var(--radius-md);
-    background: var(--color-teal);
-    color: white;
-    font-weight: 600;
-    font-size: var(--text-sm);
-    cursor: pointer;
-    transition: background-color var(--transition-fast);
-  }
-  .app-shell__quick-add:hover {
-    background: var(--color-teal-dark);
-  }
-
   .app-shell__sidebar-nav {
     display: flex;
     flex-direction: column;
@@ -205,10 +187,6 @@
   }
 
   .app-shell__bottom-nav {
-    display: none;
-  }
-
-  .app-shell__fab {
     display: none;
   }
 }

@@ -61,9 +61,9 @@ export default function WeatherPage() {
   const { destination, items } = data;
 
   return (
-    <SectionPageLayout destination={destination} destinationId={destinationId} title="Weather & Best Time" onAdd={() => setEditing({})}>
+    <SectionPageLayout destination={destination} destinationId={destinationId} title="Weather & Best Time">
       {items.length === 0 ? (
-        <EmptyState icon="☀️" title="No weather notes yet" description="Describe the year — pick months or a range, then add typical conditions." actionLabel="+ Add" onAction={() => setEditing({})} />
+        <EmptyState icon="☀️" title="No weather notes yet" description="Use the + button below — pick months or a range, then add typical conditions." />
       ) : (
         items.map(item => (
           <Card key={item.id} interactive padding="sm" accentColor="var(--color-saffron)" className="entry-card" onClick={() => setEditing(item)}>

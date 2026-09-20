@@ -40,9 +40,9 @@ export default function SourcesPage() {
   const { destination, items } = data;
 
   return (
-    <SectionPageLayout destination={destination} destinationId={destinationId} title="Sources & References" onAdd={() => setEditing({})}>
+    <SectionPageLayout destination={destination} destinationId={destinationId} title="Sources & References">
       {items.length === 0 ? (
-        <EmptyState icon="🔗" title="No sources yet" description="Articles, videos, or people you've consulted for this destination." actionLabel="+ Add" onAction={() => setEditing({})} />
+        <EmptyState icon="🔗" title="No sources yet" description="Use the + button below to add articles, videos, or people you've consulted for this destination." />
       ) : (
         items.map(item => (
           <Card key={item.id} interactive padding="sm" className="entry-card" onClick={() => setEditing(item)}>
