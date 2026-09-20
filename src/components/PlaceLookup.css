@@ -10,6 +10,9 @@
 .place-lookup__hint--error {
   color: var(--color-danger, #b91c1c);
 }
+.place-lookup__hint--broader {
+  color: var(--color-teal-dark, var(--color-teal));
+}
 
 .place-lookup__results {
   display: flex;

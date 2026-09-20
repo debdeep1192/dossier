@@ -17,9 +17,18 @@ export default function PlaceLookup({ name, locationName, destinationName, expec
   const [status, setStatus] = useState('idle'); // 'idle' | 'loading' | 'results' | 'error' | 'empty'
   const [candidates, setCandidates] = useState([]);
   const [error, setError] = useState('');
+  // Set only when the results actually came from a broader fallback
+  // search (see lib/placeLookup.js's buildFallbackNames/lookupPlace) —
+  // e.g. searching "Tiger Hill Observatory" found nothing exact, but
+  // "Tiger Hill" did. Holds the broader name that was actually used,
+  // so the person can see these results aren't an exact match to what
+  // they typed, rather than the two being shown identically. Cleared
+  // on every new search and whenever a cached/exact result is shown.
+  const [broaderSearchUsed, setBroaderSearchUsed] = useState('');
 
   async function handleFindPlace() {
     if (!name?.trim()) { setError('Enter a name first.'); setStatus('error'); return; }
+    setBroaderSearchUsed('');
 
     const cached = getCachedConfirmedResult({ name, locationName, destinationName });
     if (cached) {
@@ -35,7 +44,7 @@ export default function PlaceLookup({ name, locationName, destinationName, expec
 
     setStatus('loading');
     setError('');
-    const { candidates: results, error: lookupError } = await lookupPlace({ name, locationName, destinationName, expectedCategory });
+    const { candidates: results, error: lookupError, matchedName } = await lookupPlace({ name, locationName, destinationName, expectedCategory });
     if (lookupError) {
       setError(lookupError);
       setStatus('error');
@@ -44,6 +53,15 @@ export default function PlaceLookup({ name, locationName, destinationName, expec
     if (results.length === 0) {
       setStatus('empty');
       return;
+    }
+    // matchedName differs from what was actually typed only when a
+    // broader fallback variant is what produced results (see
+    // buildFallbackNames) — an exact-match search always returns
+    // matchedName === name. Compared case-insensitively/trimmed since
+    // that's the same normalization the lookup's own matching already
+    // treats as "the same name".
+    if (matchedName && matchedName.trim().toLowerCase() !== name.trim().toLowerCase()) {
+      setBroaderSearchUsed(matchedName);
     }
     setCandidates(results);
     setStatus('results');
@@ -55,11 +73,13 @@ export default function PlaceLookup({ name, locationName, destinationName, expec
     onConfirm(place);
     setStatus('idle');
     setCandidates([]);
+    setBroaderSearchUsed('');
   }
 
   function handleNoneOfThese() {
     setStatus('idle');
     setCandidates([]);
+    setBroaderSearchUsed('');
   }
 
   return (
@@ -82,6 +102,11 @@ export default function PlaceLookup({ name, locationName, destinationName, expec
               ? 'Previously confirmed for this name — reuse it?'
               : 'Ranked by name, location, and category match — not by Google reviews (Dossier doesn\'t have access to those). Pick the right one, or dismiss and enter manually.'}
           </p>
+          {broaderSearchUsed && (
+            <p className="place-lookup__hint place-lookup__hint--broader">
+              No exact match for "{name}" — showing results for the broader search "{broaderSearchUsed}" instead.
+            </p>
+          )}
           {candidates.map((c, i) => (
             <button key={i} type="button" className="place-lookup__candidate" onClick={() => handleSelect(c)}>
               <span className="place-lookup__candidate-name">{c.cached ? c.place.name : c.name}</span>

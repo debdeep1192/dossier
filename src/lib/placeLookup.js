@@ -224,12 +224,53 @@ export function buildConfirmedPlace(candidate, knownCityName) {
   };
 }
 
+// A small, conservative set of generic facility/category nouns that
+// appear in MANY real, unrelated place names (any city has a
+// "Railway Station", a "Temple", a "Market"...) — when a query shares
+// only these words with a candidate, that overlap carries much less
+// identifying information than sharing a distinctive word does (e.g.
+// "Ghoom" or "Glenary's" or "Tiger"). Deliberately NOT a list of
+// specific places (that would be exactly the kind of per-place
+// hardcoding this module avoids elsewhere) and deliberately NOT
+// including geographic-feature words like "hill", "peak", or
+// "valley" — those are very often the actual distinctive part of a
+// real proper name (e.g. "Tiger Hill" itself), so treating them as
+// generic would be wrong in the opposite direction. Kept intentionally
+// short: a small, defensible core of facility/institution nouns, not
+// an attempt at an exhaustive dictionary.
+const GENERIC_PLACE_WORDS = new Set([
+  'station', 'railway', 'temple', 'hotel', 'restaurant', 'museum',
+  'market', 'monastery', 'palace', 'fort', 'garden', 'zoo', 'bridge',
+  'tower', 'monument', 'church', 'viewpoint', 'observatory',
+]);
+
+// How much a generic word (see GENERIC_PLACE_WORDS) counts toward the
+// overlap score, relative to a distinctive word (which always counts
+// as 1). Not 0 — a generic word matching is still a mild, real signal
+// (a query for "Station" should still count a plausible station
+// candidate a little higher than a completely unrelated one) — just
+// not treated as equally informative as a distinctive word. This is a
+// deliberately simple, fixed constant, not a tuned/derived threshold:
+// it only needs to be small enough that one distinctive-word match
+// outweighs several generic-word matches, which 0.25 comfortably is.
+const GENERIC_WORD_WEIGHT = 0.25;
+
 /**
  * A pure, dependency-injectable string-similarity score in [0, 1].
- * Deliberately simple (normalized token overlap) rather than a
- * full edit-distance library — good enough to separate "Ganesh
- * Temple" from "Ganesha Mandir Restaurant" without adding a
+ * Deliberately simple (normalized, genericness-aware token overlap)
+ * rather than a full edit-distance library — good enough to separate
+ * "Ganesh Temple" from "Ganesha Mandir Restaurant" without adding a
  * dependency for it.
+ *
+ * Generic facility/category words (see GENERIC_PLACE_WORDS above)
+ * contribute less to the score than distinctive words — this is what
+ * lets "Ghoom Railway Station" correctly prefer a candidate actually
+ * named after Ghoom over an unrelated "Darjeeling railway station"
+ * that only shares the generic "railway"/"station" tokens: sharing
+ * just those two would previously score identically to sharing the
+ * one distinctive word, an exact, reproducible tie that let raw
+ * Nominatim "importance" (which has no idea which candidate the
+ * person actually meant) decide instead.
  */
 export function nameSimilarity(query, candidateName) {
   // Apostrophes and internal periods are part of how a name is
@@ -242,9 +283,22 @@ export function nameSimilarity(query, candidateName) {
   const qTokens = new Set(norm(query));
   const cTokens = new Set(norm(candidateName));
   if (qTokens.size === 0 || cTokens.size === 0) return 0;
-  let overlap = 0;
-  for (const t of qTokens) if (cTokens.has(t)) overlap++;
-  return overlap / Math.max(qTokens.size, cTokens.size);
+
+  const weightOf = (t) => (GENERIC_PLACE_WORDS.has(t) ? GENERIC_WORD_WEIGHT : 1);
+  let overlapWeight = 0;
+  let qWeight = 0;
+  let cWeight = 0;
+  for (const t of qTokens) qWeight += weightOf(t);
+  for (const t of cTokens) cWeight += weightOf(t);
+  for (const t of qTokens) if (cTokens.has(t)) overlapWeight += weightOf(t);
+
+  // Same shape as the original formula's `overlap / Math.max(qSize,
+  // cSize)` — never rewarding a candidate purely for being short —
+  // but computed in weighted terms on BOTH sides, so two identical
+  // strings always score exactly 1 regardless of which of their words
+  // happen to be generic (overlapWeight == qWeight == cWeight in that
+  // case).
+  return overlapWeight / Math.max(qWeight, cWeight);
 }
 
 // Rough great-circle distance in kilometers — used only to decide
@@ -417,22 +471,69 @@ async function fetchWikidataCandidates(name, fetchImpl, signal) {
 }
 
 /**
- * Fires both lookups (Wikidata first-pass for alias-aware recall,
- * Nominatim for structured geographic context) in parallel for ONE
- * specific name/query pair. Returns the raw per-source
- * fulfilled/rejected settlement so the caller (lookupPlace) can
- * decide how to interpret a "both empty" outcome (genuine zero
- * results vs. a real network failure) without re-fetching.
+ * Fires the lookups for ONE specific attempt: Wikidata (alias-aware
+ * recall) and Nominatim using the CONTEXTUALIZED query, always — plus,
+ * when `includeBareNominatim` is set, an ADDITIONAL, separate Nominatim
+ * request using ONLY the bare place name, with no city/destination
+ * appended, fired in parallel with the other two.
+ *
+ * Why a bare-name Nominatim request at all: Nominatim's own free-form
+ * parser has to work out where one part of the query ends and the
+ * next begins, and its maintainers have documented that for queries
+ * with many plausible word-boundary splits it can "give up before it
+ * gets to the right solution" for performance reasons (a real,
+ * acknowledged Nominatim limitation, not a guess). Appending
+ * ", <city>, <destination>" to an already multi-word place name only
+ * adds to that boundary-splitting burden. A bare-name request removes
+ * it entirely, giving Nominatim its best unobstructed shot at parsing
+ * the name as a whole phrase — independent of, and in addition to,
+ * the existing contextualized request (which stays, since it's often
+ * exactly what correctly disambiguates a common name between cities).
+ *
+ * `includeBareNominatim` is only ever true for the FIRST attempt in
+ * lookupPlace()'s retry sequence — see the comment there for why it
+ * is deliberately not repeated for every fallback/broader-name
+ * attempt (bounded request growth).
+ *
+ * Any bare-name results are merged straight into the SAME
+ * `nominatimCandidates` array the contextualized request produces
+ * (deduplicated against it with the normal candidate-dedup logic in
+ * mergeCandidates — see below), so nothing downstream (ranking,
+ * merging with Wikidata, the caller) needs to know or care that two
+ * separate Nominatim requests happened; it's just a fuller Nominatim
+ * candidate set for this one attempt.
  */
-async function fetchRound(name, query, fetchImpl, signal) {
-  const [nominatimResult, wikidataResult] = await Promise.allSettled([
+async function fetchRound(name, query, fetchImpl, signal, { includeBareNominatim = false } = {}) {
+  const requests = [
     fetchNominatimCandidates(query, fetchImpl, signal),
     fetchWikidataCandidates(name, fetchImpl, signal),
-  ]);
+  ];
+  // Only fired when the bare name actually differs from the
+  // contextualized query (i.e. there really was city/destination
+  // context appended) — when there's no context at all, `query` IS
+  // already just the bare name, and firing a second, identical
+  // request would be pure waste for zero additional recall.
+  const shouldFetchBareName = includeBareNominatim && name && name.trim() && name.trim() !== query;
+  if (shouldFetchBareName) requests.push(fetchNominatimCandidates(name, fetchImpl, signal));
+
+  const [nominatimResult, wikidataResult, bareNominatimResult] = await Promise.allSettled(requests);
+
+  const nominatimCandidates = nominatimResult.status === 'fulfilled' ? nominatimResult.value : [];
+  const bareNominatimCandidates = bareNominatimResult?.status === 'fulfilled' ? bareNominatimResult.value : [];
+  // Merge the bare-name Nominatim candidates into the same list the
+  // contextualized query produced, deduplicating with the exact same
+  // proximity/name logic already used to merge Wikidata results —
+  // mergeCandidates() only cares about (lat, lng, name), not which
+  // request a candidate came from, so this reuses it as-is with no
+  // new merge logic needed.
+  const combinedNominatimCandidates = shouldFetchBareName
+    ? mergeCandidates(bareNominatimCandidates, nominatimCandidates)
+    : nominatimCandidates;
+
   return {
     nominatimResult,
     wikidataResult,
-    nominatimCandidates: nominatimResult.status === 'fulfilled' ? nominatimResult.value : [],
+    nominatimCandidates: combinedNominatimCandidates,
     wikidataCandidates: wikidataResult.status === 'fulfilled' ? wikidataResult.value : [],
   };
 }
@@ -464,13 +565,22 @@ async function fetchRound(name, query, fetchImpl, signal) {
  * exact name variant that actually produced results (the original
  * name, unless a fallback variant is what succeeded) — purely
  * informational for callers/tests; ranking and the returned
- * candidates are unaffected by which variant matched. NEVER throws —
- * timeout, non-2xx response, or malformed response from EITHER OR BOTH
- * sources resolves to a graceful outcome: if one source fails but the
- * other succeeds, the lookup still returns useful candidates from
- * whichever source worked; only a failure of BOTH sources (or no name
- * given, or the throttle window) produces an error and zero candidates.
- * Saving is never blocked by any of this either way.
+ * candidates are unaffected by which variant matched. Callers (see
+ * PlaceLookup.jsx) can compare this to the name the person actually
+ * typed to show a "broader search" indication rather than presenting
+ * a fallback-sourced result as though it were an exact match. NEVER
+ * throws — timeout, non-2xx response, or malformed response from
+ * EITHER OR BOTH sources resolves to a graceful outcome: if one
+ * source fails but the other succeeds, the lookup still returns
+ * useful candidates from whichever source worked; only a failure of
+ * BOTH sources (or no name given, or the throttle window) produces an
+ * error and zero candidates. Saving is never blocked by any of this
+ * either way.
+ *
+ * The FIRST attempt (the full name as typed) also fires an additional
+ * bare-name-only Nominatim request alongside its normal contextualized
+ * one — see fetchRound()'s doc comment above for why, and the loop
+ * below for why this is never repeated on fallback attempts.
  */
 export async function lookupPlace({ name, locationName, destinationName, expectedCategory }, { fetchImpl = fetch, now = () => Date.now() } = {}) {
   const query = buildContextualQuery({ name, locationName, destinationName });
@@ -497,8 +607,19 @@ export async function lookupPlace({ name, locationName, destinationName, expecte
 
     let lastRound = null;
     let matchedName = name;
-    for (const attempt of attempts) {
-      const round = await fetchRound(attempt.attemptName, attempt.query, fetchImpl, controller?.signal);
+    for (let i = 0; i < attempts.length; i++) {
+      const attempt = attempts[i];
+      // The bare-name Nominatim request (see fetchRound's own doc
+      // comment for why it exists) is only ever fired on this FIRST
+      // attempt (i === 0), never repeated for the progressively
+      // shorter fallback names below it — a fallback name is already
+      // a shortened, simpler string, so it doesn't carry the same
+      // word-boundary-parsing risk the full name does, and firing an
+      // extra Nominatim request per fallback tier would grow request
+      // count with every additional word in the original name, which
+      // is exactly the unbounded growth this stays deliberately clear
+      // of.
+      const round = await fetchRound(attempt.attemptName, attempt.query, fetchImpl, controller?.signal, { includeBareNominatim: i === 0 });
       lastRound = round;
       if (round.nominatimCandidates.length > 0 || round.wikidataCandidates.length > 0) {
         matchedName = attempt.attemptName;
