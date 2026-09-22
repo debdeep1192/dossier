@@ -25,10 +25,24 @@ export default function PlaceLookup({ name, locationName, destinationName, expec
   // they typed, rather than the two being shown identically. Cleared
   // on every new search and whenever a cached/exact result is shown.
   const [broaderSearchUsed, setBroaderSearchUsed] = useState('');
+  // True specifically when the broader search above ALSO dropped a
+  // word that names a distinct kind of place (a "station", "museum",
+  // "observatory"...) — see lib/placeLookup.js's
+  // droppedAnEntityTypeWord()/ENTITY_TYPE_WORDS. This gets a visibly
+  // stronger caution than an ordinary broader-search note, since the
+  // person may be looking at a related-but-different, larger place
+  // (e.g. the whole hill) rather than the specific thing they searched
+  // for (a viewpoint/facility on it) — never set when nothing was
+  // dropped, and never set for the spelling/punctuation/bare-name
+  // discovery variants, since those find the SAME requested name, not
+  // a broader one (matchedName stays equal to what was typed in that
+  // case, so broaderSearchUsed itself is never set either).
+  const [entityTypeDropped, setEntityTypeDropped] = useState(false);
 
   async function handleFindPlace() {
     if (!name?.trim()) { setError('Enter a name first.'); setStatus('error'); return; }
     setBroaderSearchUsed('');
+    setEntityTypeDropped(false);
 
     const cached = getCachedConfirmedResult({ name, locationName, destinationName });
     if (cached) {
@@ -44,7 +58,7 @@ export default function PlaceLookup({ name, locationName, destinationName, expec
 
     setStatus('loading');
     setError('');
-    const { candidates: results, error: lookupError, matchedName } = await lookupPlace({ name, locationName, destinationName, expectedCategory });
+    const { candidates: results, error: lookupError, matchedName, matchedViaEntityTypeDrop } = await lookupPlace({ name, locationName, destinationName, expectedCategory });
     if (lookupError) {
       setError(lookupError);
       setStatus('error');
@@ -57,11 +71,16 @@ export default function PlaceLookup({ name, locationName, destinationName, expec
     // matchedName differs from what was actually typed only when a
     // broader fallback variant is what produced results (see
     // buildFallbackNames) — an exact-match search always returns
-    // matchedName === name. Compared case-insensitively/trimmed since
-    // that's the same normalization the lookup's own matching already
-    // treats as "the same name".
+    // matchedName === name (this includes results found via the
+    // spelling/punctuation/bare-name discovery variants — those are
+    // alternative ways of finding the SAME requested name, not a
+    // broadening to a different one, so they never set this either).
+    // Compared case-insensitively/trimmed since that's the same
+    // normalization the lookup's own matching already treats as "the
+    // same name".
     if (matchedName && matchedName.trim().toLowerCase() !== name.trim().toLowerCase()) {
       setBroaderSearchUsed(matchedName);
+      setEntityTypeDropped(Boolean(matchedViaEntityTypeDrop));
     }
     setCandidates(results);
     setStatus('results');
@@ -74,12 +93,14 @@ export default function PlaceLookup({ name, locationName, destinationName, expec
     setStatus('idle');
     setCandidates([]);
     setBroaderSearchUsed('');
+    setEntityTypeDropped(false);
   }
 
   function handleNoneOfThese() {
     setStatus('idle');
     setCandidates([]);
     setBroaderSearchUsed('');
+    setEntityTypeDropped(false);
   }
 
   return (
@@ -103,8 +124,10 @@ export default function PlaceLookup({ name, locationName, destinationName, expec
               : 'Ranked by name, location, and category match — not by Google reviews (Dossier doesn\'t have access to those). Pick the right one, or dismiss and enter manually.'}
           </p>
           {broaderSearchUsed && (
-            <p className="place-lookup__hint place-lookup__hint--broader">
-              No exact match for "{name}" — showing results for the broader search "{broaderSearchUsed}" instead.
+            <p className={`place-lookup__hint place-lookup__hint--broader${entityTypeDropped ? ' place-lookup__hint--caution' : ''}`}>
+              {entityTypeDropped
+                ? `No exact match for "${name}" — showing results for the broader "${broaderSearchUsed}" instead. This may be a different, more specific place than what you searched for.`
+                : `No exact match for "${name}" — showing results for the broader search "${broaderSearchUsed}" instead.`}
             </p>
           )}
           {candidates.map((c, i) => (

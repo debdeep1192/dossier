@@ -79,6 +79,80 @@ export function buildFallbackNames(name) {
   return variants;
 }
 
+
+/**
+ * A single, deterministic ALTERNATE-SPELLING variant: collapses a
+ * doubled vowel ("oo") to its single-letter equivalent ("u") — e.g.
+ * "Ghoom" -> "Ghum". This is not a guess: it is a real, well-attested
+ * pattern in how Indian-subcontinent place names ended up with two
+ * common English spellings (the Wikipedia article for the actual
+ * place this was investigated against is titled "Ghum railway
+ * station", with "Ghoom" documented across multiple independent
+ * sources as the common alternate spelling of the same "oo"-sound
+ * vowel) — the same pattern recurs elsewhere (Roorkee/Rurkee,
+ * Coochbehar/Cuchbehar). It is deliberately narrow: ONLY "oo" -> "u",
+ * not a general "collapse any doubled letter" rule (that mangles
+ * unrelated real spellings, e.g. "Ghoom" -> "Ghom", which is not a
+ * real spelling of anything) and not a general vowel-doubling rule
+ * for "aa"/"ee"/"ii" (no concrete case in this codebase's own
+ * investigation history justifies those; adding them speculatively
+ * would be exactly the kind of unjustified generalization this
+ * module avoids elsewhere).
+ *
+ * Returns null when the transform doesn't actually change anything
+ * (no "oo" present) — callers use this to decide whether the extra
+ * discovery request is worth making at all.
+ */
+export function buildSpellingVariant(name) {
+  if (!name) return null;
+  const variant = name.replace(/oo/gi, (m) => (m === m.toUpperCase() ? 'U' : 'u'));
+  return variant !== name ? variant : null;
+}
+
+/**
+ * A single, deterministic PUNCTUATION variant for a common, narrow
+ * case: a name typed WITHOUT a possessive apostrophe that a real
+ * place's indexed name actually has (e.g. "Glenarys" vs the real
+ * "Glenary's"). This does NOT try every possible apostrophe insertion
+ * position (which would be combinatorial — O(word length) variants
+ * for a single word, most of them nonsensical) — it uses the ONE
+ * structurally privileged position an English possessive apostrophe
+ * can occur: immediately before a trailing "s". "Glenarys" matches
+ * `<word ending in a letter><s>` and produces exactly ONE variant,
+ * "Glenary's" — not seven.
+ *
+ * This is inherently imprecise in the other direction — plenty of
+ * real place names ending in "s" are ordinary plurals, not missing
+ * possessives (e.g. "Gardens", "Falls"), and this will generate a
+ * grammatically-wrong variant for those too ("Garden's", "Fall's").
+ * That is an accepted, bounded cost, not a correctness risk: a
+ * variant that matches nothing simply returns zero candidates (same
+ * as any other empty search), and a variant that happens to match
+ * something still has to earn its rank normally through
+ * nameSimilarity/categoryScore against the ORIGINAL query in
+ * rankCandidates() — it can never masquerade as a false positive.
+ *
+ * Nominatim's own indexing is WHY this specific position is the
+ * useful one to try: Nominatim's default term-normalization replaces
+ * punctuation with a SPACE rather than removing it, so an indexed
+ * name like "Glenary's" is tokenized internally as {"glenary", "s"} —
+ * a query of "Glenarys" (one token, {"glenarys"}) cannot match that at
+ * the index level no matter how well our own nameSimilarity() would
+ * score the two strings once a candidate exists (it already scores
+ * them as identical — the gap is entirely upstream of ranking).
+ * Trying "Glenary's" as an actual query produces the SAME token split
+ * {"glenary", "s"} the index was built from.
+ *
+ * Returns null when the name doesn't end in that specific pattern (no
+ * extra request is generated for the common case).
+ */
+export function buildPunctuationVariant(name) {
+  if (!name) return null;
+  const match = name.match(/^(.*[A-Za-z])s$/);
+  if (!match) return null;
+  return `${match[1]}'s`;
+}
+
 /**
  * Builds the contextual query Nominatim uses: "<name>, <city/location>,
  * <country/destination>" — omitting any part that's blank, AND
@@ -224,53 +298,73 @@ export function buildConfirmedPlace(candidate, knownCityName) {
   };
 }
 
-// A small, conservative set of generic facility/category nouns that
-// appear in MANY real, unrelated place names (any city has a
-// "Railway Station", a "Temple", a "Market"...) — when a query shares
-// only these words with a candidate, that overlap carries much less
-// identifying information than sharing a distinctive word does (e.g.
-// "Ghoom" or "Glenary's" or "Tiger"). Deliberately NOT a list of
-// specific places (that would be exactly the kind of per-place
-// hardcoding this module avoids elsewhere) and deliberately NOT
-// including geographic-feature words like "hill", "peak", or
-// "valley" — those are very often the actual distinctive part of a
-// real proper name (e.g. "Tiger Hill" itself), so treating them as
-// generic would be wrong in the opposite direction. Kept intentionally
-// short: a small, defensible core of facility/institution nouns, not
-// an attempt at an exhaustive dictionary.
-const GENERIC_PLACE_WORDS = new Set([
+// A small, deterministic set of entity-type/facility nouns — used
+// ONLY to answer "did the fallback mechanism drop a word that changes
+// what KIND of place was being asked for" (see the entity-type-drop
+// detection in lookupPlace below) and to let CATEGORY_HINTS reason
+// about a query's implied category. This is deliberately NOT used
+// inside nameSimilarity — text similarity and category/entity-type
+// matching are two different questions ("how similar are these
+// names?" vs "is this the kind of place asked for?") and conflating
+// them by deweighting these words inside name-similarity math was
+// tried and found to be a genuine bug: it also weakens the penalty
+// for a candidate that's MISSING the category information entirely,
+// letting e.g. a bare locality named "Ghoom" score an inflated 0.667
+// similarity against a query for "Ghoom Railway Station" (only one of
+// three words actually shared) instead of the honest, plain ~0.333 —
+// see nameSimilarity's own tests for the concrete regression case.
+// Deliberately NOT a list of specific places (that would be exactly
+// the kind of per-place hardcoding this module avoids elsewhere) and
+// deliberately NOT including geographic-feature words like "hill",
+// "peak", "valley", "lake", "river", or "mountain" — those are very
+// often the actual distinctive part of a real proper name (e.g.
+// "Tiger Hill" itself), so treating them as generic/entity-type would
+// be wrong in the opposite direction. Kept intentionally short: a
+// small, defensible core of facility/institution nouns, not an
+// attempt at an exhaustive taxonomy.
+const ENTITY_TYPE_WORDS = new Set([
   'station', 'railway', 'temple', 'hotel', 'restaurant', 'museum',
   'market', 'monastery', 'palace', 'fort', 'garden', 'zoo', 'bridge',
   'tower', 'monument', 'church', 'viewpoint', 'observatory',
 ]);
 
-// How much a generic word (see GENERIC_PLACE_WORDS) counts toward the
-// overlap score, relative to a distinctive word (which always counts
-// as 1). Not 0 — a generic word matching is still a mild, real signal
-// (a query for "Station" should still count a plausible station
-// candidate a little higher than a completely unrelated one) — just
-// not treated as equally informative as a distinctive word. This is a
-// deliberately simple, fixed constant, not a tuned/derived threshold:
-// it only needs to be small enough that one distinctive-word match
-// outweighs several generic-word matches, which 0.25 comfortably is.
-const GENERIC_WORD_WEIGHT = 0.25;
+/**
+ * True when `matchedName` is a genuine FALLBACK of `originalName`
+ * (see buildFallbackNames — matchedName is always originalName with
+ * zero or more TRAILING words dropped) AND at least one of the
+ * dropped words is an entity-type word (see ENTITY_TYPE_WORDS above).
+ * Used by lookupPlace to set matchedViaEntityTypeDrop — see its own
+ * doc comment for what that flag means and how callers should use it.
+ *
+ * Deliberately simple: just a set difference on lowercased tokens, no
+ * numeric threshold. "Tiger Hill Observatory" -> "Tiger Hill" drops
+ * {"observatory"} — an entity-type word, so true. "Old Tiger Hill" ->
+ * "Tiger Hill" drops {"old"} — not an entity-type word, so false.
+ * "Tiger Hill" matched directly (matchedName === originalName) always
+ * returns false, since nothing was dropped at all.
+ */
+function droppedAnEntityTypeWord(originalName, matchedName) {
+  if (!originalName || !matchedName || originalName.trim().toLowerCase() === matchedName.trim().toLowerCase()) return false;
+  const originalWords = originalName.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const matchedWords = new Set(matchedName.trim().toLowerCase().split(/\s+/).filter(Boolean));
+  const dropped = originalWords.filter(w => !matchedWords.has(w));
+  return dropped.some(w => ENTITY_TYPE_WORDS.has(w));
+}
 
 /**
  * A pure, dependency-injectable string-similarity score in [0, 1].
- * Deliberately simple (normalized, genericness-aware token overlap)
- * rather than a full edit-distance library — good enough to separate
- * "Ganesh Temple" from "Ganesha Mandir Restaurant" without adding a
+ * Deliberately simple (normalized, plain token overlap) rather than a
+ * full edit-distance library — good enough to separate "Ganesh
+ * Temple" from "Ganesha Mandir Restaurant" without adding a
  * dependency for it.
  *
- * Generic facility/category words (see GENERIC_PLACE_WORDS above)
- * contribute less to the score than distinctive words — this is what
- * lets "Ghoom Railway Station" correctly prefer a candidate actually
- * named after Ghoom over an unrelated "Darjeeling railway station"
- * that only shares the generic "railway"/"station" tokens: sharing
- * just those two would previously score identically to sharing the
- * one distinctive word, an exact, reproducible tie that let raw
- * Nominatim "importance" (which has no idea which candidate the
- * person actually meant) decide instead.
+ * Every token counts equally, including entity-type/category words
+ * (station, temple, museum...) — see ENTITY_TYPE_WORDS above for why
+ * this is deliberate: whether a candidate is the RIGHT KIND of place
+ * is categoryScore/osmClass's job (see rankCandidates below), not
+ * this function's. A candidate that's missing a category word the
+ * query asked for should score honestly lower here, not get a nearly
+ * free pass because that word was pre-discounted.
  */
 export function nameSimilarity(query, candidateName) {
   // Apostrophes and internal periods are part of how a name is
@@ -283,22 +377,9 @@ export function nameSimilarity(query, candidateName) {
   const qTokens = new Set(norm(query));
   const cTokens = new Set(norm(candidateName));
   if (qTokens.size === 0 || cTokens.size === 0) return 0;
-
-  const weightOf = (t) => (GENERIC_PLACE_WORDS.has(t) ? GENERIC_WORD_WEIGHT : 1);
-  let overlapWeight = 0;
-  let qWeight = 0;
-  let cWeight = 0;
-  for (const t of qTokens) qWeight += weightOf(t);
-  for (const t of cTokens) cWeight += weightOf(t);
-  for (const t of qTokens) if (cTokens.has(t)) overlapWeight += weightOf(t);
-
-  // Same shape as the original formula's `overlap / Math.max(qSize,
-  // cSize)` — never rewarding a candidate purely for being short —
-  // but computed in weighted terms on BOTH sides, so two identical
-  // strings always score exactly 1 regardless of which of their words
-  // happen to be generic (overlapWeight == qWeight == cWeight in that
-  // case).
-  return overlapWeight / Math.max(qWeight, cWeight);
+  let overlap = 0;
+  for (const t of qTokens) if (cTokens.has(t)) overlap++;
+  return overlap / Math.max(qTokens.size, cTokens.size);
 }
 
 // Rough great-circle distance in kilometers — used only to decide
@@ -404,7 +485,13 @@ export function mergeCandidates(wikidataCandidates, nominatimCandidates) {
 // ranking (never to filter results out entirely) — kept intentionally
 // small and forgiving, since OSM tagging is inconsistent in practice.
 export const CATEGORY_HINTS = {
-  attraction: { classes: ['tourism', 'historic', 'amenity', 'leisure', 'natural'] },
+  // 'railway' added: a real railway station (e.g. a heritage/scenic
+  // line station) is a legitimate, common tourist attraction — the
+  // Ghum railway station investigation found this class was missing,
+  // causing a genuine, correctly-tagged railway landmark to be scored
+  // as "wrong category" (0.2) for an Attractions search, which is
+  // simply incorrect independent of any specific place.
+  attraction: { classes: ['tourism', 'historic', 'amenity', 'leisure', 'natural', 'railway'] },
   restaurant: { classes: ['amenity', 'shop'] },
   accommodation: { classes: ['tourism', 'building'] },
 };
@@ -473,62 +560,113 @@ async function fetchWikidataCandidates(name, fetchImpl, signal) {
 /**
  * Fires the lookups for ONE specific attempt: Wikidata (alias-aware
  * recall) and Nominatim using the CONTEXTUALIZED query, always — plus,
- * when `includeBareNominatim` is set, an ADDITIONAL, separate Nominatim
- * request using ONLY the bare place name, with no city/destination
- * appended, fired in parallel with the other two.
+ * when `includeExtraVariants` is set, ADDITIONAL, separate Nominatim
+ * requests for a small, fixed set of deterministic query variants,
+ * each fired in parallel with the others:
  *
- * Why a bare-name Nominatim request at all: Nominatim's own free-form
- * parser has to work out where one part of the query ends and the
- * next begins, and its maintainers have documented that for queries
- * with many plausible word-boundary splits it can "give up before it
- * gets to the right solution" for performance reasons (a real,
- * acknowledged Nominatim limitation, not a guess). Appending
- * ", <city>, <destination>" to an already multi-word place name only
- * adds to that boundary-splitting burden. A bare-name request removes
- * it entirely, giving Nominatim its best unobstructed shot at parsing
- * the name as a whole phrase — independent of, and in addition to,
- * the existing contextualized request (which stays, since it's often
- * exactly what correctly disambiguates a common name between cities).
+ *   - the BARE place name, with no city/destination appended;
+ *   - a SPELLING variant (see buildSpellingVariant) — a doubled-vowel
+ *     collapse, e.g. "Ghoom" -> "Ghum";
+ *   - a PUNCTUATION variant (see buildPunctuationVariant) — a missing
+ *     possessive apostrophe restored in its one structurally-valid
+ *     position, e.g. "Glenarys" -> "Glenary's".
  *
- * `includeBareNominatim` is only ever true for the FIRST attempt in
- * lookupPlace()'s retry sequence — see the comment there for why it
+ * Every variant is generated from the NAME (not the already-built
+ * contextualized `query` string) and then re-contextualized with
+ * buildContextualQuery — this matters for the punctuation variant in
+ * particular, whose pattern only makes sense checked against the
+ * place name itself, not wherever the full "<name>, <city>,
+ * <destination>" string happens to end. Each variant is skipped
+ * entirely when it doesn't actually change the name (see each
+ * builder's own null case), and the resulting queries are
+ * deduplicated against the primary query and against each other — so
+ * a query with no doubled vowel and no missing-possessive pattern
+ * fires ZERO extra requests, and a query matching only one of the two
+ * patterns fires exactly one extra request, never more than the
+ * number of DISTINCT variants that actually apply.
+ *
+ * Why these exist at all: both providers match against their own
+ * indexed name/label text, not open-ended natural language — see each
+ * variant builder's own doc comment for the specific, evidence-based
+ * reasoning behind each one (Nominatim's documented word-boundary
+ * parsing limitation for the bare-name case; Nominatim's
+ * punctuation-to-space normalization for the punctuation case; a
+ * well-attested English-transliteration pattern for the spelling
+ * case). None of this is fuzzy/approximate matching: every variant is
+ * still an exact, literal query sent to the same real providers —
+ * nothing is invented — and every candidate found this way still has
+ * to earn its rank normally against the FULL original name in
+ * rankCandidates() (see lookupPlace below).
+ *
+ * `includeExtraVariants` is only ever true for the FIRST attempt in
+ * lookupPlace()'s retry sequence — see the comment there for why this
  * is deliberately not repeated for every fallback/broader-name
- * attempt (bounded request growth).
+ * attempt (bounded request growth: a fallback name is already
+ * shortened/simplified, so it doesn't carry the same discovery risk
+ * the full name does, and repeating these per fallback tier would
+ * grow request count with every word in the original name).
  *
- * Any bare-name results are merged straight into the SAME
+ * All variant results are merged straight into the SAME
  * `nominatimCandidates` array the contextualized request produces
  * (deduplicated against it with the normal candidate-dedup logic in
  * mergeCandidates — see below), so nothing downstream (ranking,
- * merging with Wikidata, the caller) needs to know or care that two
- * separate Nominatim requests happened; it's just a fuller Nominatim
- * candidate set for this one attempt.
+ * merging with Wikidata, the caller) needs to know or care how many
+ * separate Nominatim requests happened this attempt; it's just a
+ * fuller Nominatim candidate set.
  */
-async function fetchRound(name, query, fetchImpl, signal, { includeBareNominatim = false } = {}) {
+async function fetchRound(name, query, fetchImpl, signal, { includeExtraVariants = false, locationName, destinationName } = {}) {
   const requests = [
     fetchNominatimCandidates(query, fetchImpl, signal),
     fetchWikidataCandidates(name, fetchImpl, signal),
   ];
-  // Only fired when the bare name actually differs from the
-  // contextualized query (i.e. there really was city/destination
-  // context appended) — when there's no context at all, `query` IS
-  // already just the bare name, and firing a second, identical
-  // request would be pure waste for zero additional recall.
-  const shouldFetchBareName = includeBareNominatim && name && name.trim() && name.trim() !== query;
-  if (shouldFetchBareName) requests.push(fetchNominatimCandidates(name, fetchImpl, signal));
 
-  const [nominatimResult, wikidataResult, bareNominatimResult] = await Promise.allSettled(requests);
+  // Collect every candidate EXTRA query for this attempt, then
+  // deduplicate (case-insensitively) against the primary query and
+  // against each other, so a name matching more than one variant rule
+  // still only ever fires each genuinely distinct string once.
+  //
+  // The spelling/punctuation variants are computed from the NAME
+  // alone, then re-contextualized with buildContextualQuery — not
+  // computed by transforming the already-built contextual `query`
+  // string directly. This matters for the punctuation variant in
+  // particular: its pattern (a trailing "s") must be checked against
+  // the actual place name, not wherever the full "<name>, <city>,
+  // <destination>" string happens to end (which is usually the city
+  // or destination, not the name at all).
+  const extraQueries = [];
+  if (includeExtraVariants) {
+    const trimmedName = (name || '').trim();
+    const spellingVariantName = buildSpellingVariant(trimmedName);
+    const punctuationVariantName = buildPunctuationVariant(trimmedName);
+    const candidates = [
+      trimmedName, // the bare name, no city/destination context
+      spellingVariantName ? buildContextualQuery({ name: spellingVariantName, locationName, destinationName }) : null,
+      punctuationVariantName ? buildContextualQuery({ name: punctuationVariantName, locationName, destinationName }) : null,
+    ].filter(Boolean);
+    const seen = new Set([query.trim().toLowerCase()]);
+    for (const c of candidates) {
+      const key = c.trim().toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      extraQueries.push(c);
+    }
+  }
+  for (const q of extraQueries) requests.push(fetchNominatimCandidates(q, fetchImpl, signal));
+
+  const settled = await Promise.allSettled(requests);
+  const [nominatimResult, wikidataResult, ...extraResults] = settled;
 
   const nominatimCandidates = nominatimResult.status === 'fulfilled' ? nominatimResult.value : [];
-  const bareNominatimCandidates = bareNominatimResult?.status === 'fulfilled' ? bareNominatimResult.value : [];
-  // Merge the bare-name Nominatim candidates into the same list the
-  // contextualized query produced, deduplicating with the exact same
-  // proximity/name logic already used to merge Wikidata results —
+  // Merge every extra-variant Nominatim result into the same list the
+  // contextualized query produced, one at a time, reusing the exact
+  // proximity/name dedup logic already used for Wikidata results —
   // mergeCandidates() only cares about (lat, lng, name), not which
-  // request a candidate came from, so this reuses it as-is with no
-  // new merge logic needed.
-  const combinedNominatimCandidates = shouldFetchBareName
-    ? mergeCandidates(bareNominatimCandidates, nominatimCandidates)
-    : nominatimCandidates;
+  // request or variant a candidate came from.
+  let combinedNominatimCandidates = nominatimCandidates;
+  for (const result of extraResults) {
+    const extraCandidates = result.status === 'fulfilled' ? result.value : [];
+    if (extraCandidates.length > 0) combinedNominatimCandidates = mergeCandidates(extraCandidates, combinedNominatimCandidates);
+  }
 
   return {
     nominatimResult,
@@ -561,15 +699,32 @@ async function fetchRound(name, query, fetchImpl, signal, { includeBareNominatim
  * fallback round is skipped entirely once any round (primary or
  * fallback) succeeds.
  *
- * Returns { candidates, error, matchedName }. `matchedName` is the
- * exact name variant that actually produced results (the original
- * name, unless a fallback variant is what succeeded) — purely
- * informational for callers/tests; ranking and the returned
- * candidates are unaffected by which variant matched. Callers (see
- * PlaceLookup.jsx) can compare this to the name the person actually
- * typed to show a "broader search" indication rather than presenting
- * a fallback-sourced result as though it were an exact match. NEVER
- * throws — timeout, non-2xx response, or malformed response from
+ * Returns { candidates, error, matchedName, matchedViaEntityTypeDrop }.
+ * `matchedName` is the exact name variant that actually produced
+ * results (the original name, unless a fallback variant is what
+ * succeeded) — purely informational for callers/tests; ranking and
+ * the returned candidates are unaffected by which variant matched.
+ * Callers (see PlaceLookup.jsx) can compare this to the name the
+ * person actually typed to show a "broader search" indication rather
+ * than presenting a fallback-sourced result as though it were an
+ * exact match.
+ *
+ * `matchedViaEntityTypeDrop` is true specifically when matchedName
+ * came from a FALLBACK attempt (word-dropping, see buildFallbackNames)
+ * AND at least one of the words dropped between the original name and
+ * matchedName is an entity-type/facility word (see ENTITY_TYPE_WORDS)
+ * — e.g. "Tiger Hill Observatory" falling back to "Tiger Hill" drops
+ * "observatory", a real entity-type word, so this is true; "Old Tiger
+ * Hill" falling back to "Tiger Hill" drops only "old", so this is
+ * false. This is never true when matchedName === name (nothing was
+ * dropped), and never true when the extra-variant mechanism (bare
+ * name / spelling / punctuation — see fetchRound above) is what found
+ * the result rather than a fallback, since those are alternative
+ * DISCOVERY of the SAME requested name, not a broadening to a
+ * different one. Purely a presentation signal for the caller — it
+ * never filters or re-ranks anything.
+ *
+ * NEVER throws — timeout, non-2xx response, or malformed response from
  * EITHER OR BOTH sources resolves to a graceful outcome: if one
  * source fails but the other succeeds, the lookup still returns
  * useful candidates from whichever source worked; only a failure of
@@ -577,10 +732,11 @@ async function fetchRound(name, query, fetchImpl, signal, { includeBareNominatim
  * error and zero candidates. Saving is never blocked by any of this
  * either way.
  *
- * The FIRST attempt (the full name as typed) also fires an additional
- * bare-name-only Nominatim request alongside its normal contextualized
- * one — see fetchRound()'s doc comment above for why, and the loop
- * below for why this is never repeated on fallback attempts.
+ * The FIRST attempt (the full name as typed) also fires additional
+ * discovery-variant Nominatim requests alongside its normal
+ * contextualized one — see fetchRound()'s doc comment above for why,
+ * and the loop below for why these are never repeated on fallback
+ * attempts.
  */
 export async function lookupPlace({ name, locationName, destinationName, expectedCategory }, { fetchImpl = fetch, now = () => Date.now() } = {}) {
   const query = buildContextualQuery({ name, locationName, destinationName });
@@ -609,17 +765,17 @@ export async function lookupPlace({ name, locationName, destinationName, expecte
     let matchedName = name;
     for (let i = 0; i < attempts.length; i++) {
       const attempt = attempts[i];
-      // The bare-name Nominatim request (see fetchRound's own doc
-      // comment for why it exists) is only ever fired on this FIRST
-      // attempt (i === 0), never repeated for the progressively
+      // The extra discovery-variant Nominatim requests (bare name,
+      // spelling variant, punctuation variant — see fetchRound's own
+      // doc comment for why each exists) are only ever fired on this
+      // FIRST attempt (i === 0), never repeated for the progressively
       // shorter fallback names below it — a fallback name is already
       // a shortened, simpler string, so it doesn't carry the same
-      // word-boundary-parsing risk the full name does, and firing an
-      // extra Nominatim request per fallback tier would grow request
-      // count with every additional word in the original name, which
-      // is exactly the unbounded growth this stays deliberately clear
-      // of.
-      const round = await fetchRound(attempt.attemptName, attempt.query, fetchImpl, controller?.signal, { includeBareNominatim: i === 0 });
+      // discovery risk the full name does, and firing these extra
+      // requests per fallback tier would grow request count with
+      // every additional word in the original name, which is exactly
+      // the unbounded growth this stays deliberately clear of.
+      const round = await fetchRound(attempt.attemptName, attempt.query, fetchImpl, controller?.signal, { includeExtraVariants: i === 0, locationName, destinationName });
       lastRound = round;
       if (round.nominatimCandidates.length > 0 || round.wikidataCandidates.length > 0) {
         matchedName = attempt.attemptName;
@@ -658,7 +814,7 @@ export async function lookupPlace({ name, locationName, destinationName, expecte
     // other candidate, not get a free pass for matching a truncated
     // query.
     const ranked = rankCandidates(merged, { name, locationName, destinationName, expectedCategory });
-    return { candidates: ranked, error: null, matchedName };
+    return { candidates: ranked, error: null, matchedName, matchedViaEntityTypeDrop: droppedAnEntityTypeWord(name, matchedName) };
   } catch (err) {
     const reason = err?.name === 'AbortError' ? 'The lookup timed out.' : 'Could not reach the lookup service (offline or network error).';
     return { candidates: [], error: `${reason} You can still enter the place manually.` };

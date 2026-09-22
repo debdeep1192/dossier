@@ -568,11 +568,14 @@ await test("Glenary's: an EXACT match on the full query is used directly — no 
   // 3 requests total on this one attempt: the contextualized Nominatim
   // query, the bare-name Nominatim query (see fetchRound's doc
   // comment — fired alongside the contextualized one on the FIRST
-  // attempt only), and the Wikidata search; the wbgetentities
-  // follow-up is a 4th but is part of the SAME attempt, not a retry —
-  // confirms no FALLBACK round fired when the first one already
-  // succeeded (which is what this test is really guarding against).
-  assert.equal(attemptedQueries.length, 3, 'an exact-match first attempt must not trigger any fallback request (though it does now include one extra bare-name Nominatim query alongside the original two)');
+  // attempt only, along with the spelling/punctuation variants, when
+  // any of those actually apply — neither applies here, since
+  // "Glenary's" has no doubled vowel and already ends in "'s", not a
+  // bare "s"), and the Wikidata search; the wbgetentities follow-up is
+  // a 4th but is part of the SAME attempt, not a retry — confirms no
+  // FALLBACK round fired when the first one already succeeded (which
+  // is what this test is really guarding against).
+  assert.equal(attemptedQueries.length, 3, 'an exact-match first attempt must not trigger any fallback request (it does include one extra bare-name Nominatim query alongside the original two; no spelling/punctuation variant applies to "Glenary\'s" itself)');
   // Both the contextualized query AND the bare-name query should be
   // present among what was attempted (order between the two Nominatim
   // requests and the Wikidata request isn't guaranteed since they run
@@ -602,39 +605,115 @@ await test('a real network failure on the first attempt stops immediately — it
   assert.ok(error);
   // 3 requests on this one round: contextualized Nominatim, bare-name
   // Nominatim (fired alongside it on the first attempt — see
-  // fetchRound), and Wikidata — all three reject, and that's enough
-  // to conclude a genuine failure and stop; no fallback retry attempt
-  // follows.
+  // fetchRound; no spelling/punctuation variant applies to "Tiger
+  // Hill Observatory" itself), and Wikidata — all three reject, and
+  // that's enough to conclude a genuine failure and stop; no fallback
+  // retry attempt follows.
   assert.equal(callCount, 3, 'a genuine failure (not just an empty result) must not trigger fallback retries — only 1 round should fire, now with 3 requests (contextualized + bare-name Nominatim, plus Wikidata) instead of 2');
 });
 
-console.log('\n5d. Bare-name Nominatim discovery — Ghoom/Ghum Railway Station and generic-category collisions');
+console.log('\n5d. Discovery-variant Nominatim requests — bare name, spelling variant, punctuation variant');
 
-await test('the contextual query finds nothing, but a bare-name-only Nominatim query finds the real place (the Ghoom Railway Station scenario)', async () => {
+await test('spelling variant discovery: the contextual AND bare-name queries find nothing, but the "oo"->"u" spelling variant finds the real place (the Ghoom/Ghum Railway Station scenario)', async () => {
   const fetchImpl = mockQueryAware({
-    // The contextualized query returns nothing — this reproduces the
-    // documented Nominatim limitation where appending city/destination
-    // context to an already multi-word name can defeat its own
-    // word-boundary parser (see fetchRound's doc comment).
+    // Neither the contextualized nor the bare "Ghoom" spelling finds
+    // anything — this reproduces the real, researched fact that the
+    // station's actual/canonical name is spelled "Ghum" (its own
+    // Wikipedia article title), not "Ghoom" (the common alternate
+    // spelling this query uses).
     'Ghoom Railway Station, Ghoom': { nominatimResults: [] },
-    // The BARE name alone succeeds — OSM's own name/alt_name tag for
-    // the real station may contain the exact phrase without needing
-    // any city qualifier to match correctly.
-    'Ghoom Railway Station': {
-      nominatimResults: [rawNominatim({ name: 'Ghoom railway station', city: 'Ghoom', country: 'India', osmClass: 'railway', importance: 0.15 })],
+    'Ghoom Railway Station': { nominatimResults: [] },
+    // The spelling-variant query ("oo" -> "u", applied to the NAME
+    // only — the locality "Ghoom" passed as context is untouched,
+    // since buildSpellingVariant transforms just the name before
+    // buildContextualQuery re-attaches the original, unmodified
+    // locationName/destinationName) succeeds.
+    'Ghum Railway Station, Ghoom': {
+      nominatimResults: [rawNominatim({ name: 'Ghum railway station', city: 'Ghoom', country: 'India', osmClass: 'railway', importance: 0.15 })],
     },
   });
-  const { candidates, error, matchedName } = await lookupPlace(
+  const { candidates, error, matchedName, matchedViaEntityTypeDrop } = await lookupPlace(
     { name: 'Ghoom Railway Station', locationName: 'Ghoom' },
     { fetchImpl, now: () => 4000000 },
   );
   assert.equal(error, null);
-  assert.ok(candidates.length > 0, 'the bare-name Nominatim query should surface the real station even though the contextualized query found nothing');
-  assert.equal(matchedName, 'Ghoom Railway Station', 'this is the ORIGINAL name, not a fallback variant — buildFallbackNames/word-dropping never had to run, since the bare-name Nominatim request (a different mechanism) found it on the first attempt');
-  assert.equal(candidates[0].name, 'Ghoom railway station');
+  assert.ok(candidates.length > 0, 'the spelling-variant Nominatim query should surface the real station even though both the contextualized and bare-name queries found nothing');
+  assert.equal(matchedName, 'Ghoom Railway Station', 'this is the ORIGINAL name, not a fallback variant — buildFallbackNames/word-dropping never had to run, since the spelling-variant request (a parallel discovery mechanism, not a broadening) found it on the first attempt');
+  assert.equal(matchedViaEntityTypeDrop, false, 'nothing was dropped — this is alternative discovery of the SAME requested name, not a broader fallback, so the entity-type-drop flag must be false');
+  assert.equal(candidates[0].name, 'Ghum railway station');
 });
 
-await test('merge/dedup: when BOTH the contextual and bare-name Nominatim queries return the SAME real place, it appears only once in the final results, not duplicated', async () => {
+await test('punctuation variant discovery: "Glenarys" (no apostrophe) finds the real "Glenary\'s" via the possessive-apostrophe variant', async () => {
+  const fetchImpl = mockQueryAware({
+    'Glenarys, Darjeeling': { nominatimResults: [] },
+    'Glenarys': { nominatimResults: [] },
+    // The punctuation-variant query restores the apostrophe in its one
+    // structurally valid position (immediately before the trailing
+    // "s") and succeeds.
+    "Glenary's, Darjeeling": {
+      nominatimResults: [rawNominatim({ name: "Glenary's", city: 'Darjeeling', country: 'India', osmClass: 'amenity', importance: 0.35 })],
+    },
+  });
+  const { candidates, error, matchedName, matchedViaEntityTypeDrop } = await lookupPlace(
+    { name: 'Glenarys', locationName: 'Darjeeling' },
+    { fetchImpl, now: () => 4050000 },
+  );
+  assert.equal(error, null);
+  assert.ok(candidates.length > 0, 'the punctuation-variant Nominatim query should surface the real place');
+  assert.equal(matchedName, 'Glenarys', 'this is the ORIGINAL name as typed — alternative discovery, not a fallback to a different name');
+  assert.equal(matchedViaEntityTypeDrop, false);
+  assert.equal(candidates[0].name, "Glenary's");
+});
+
+await test('the punctuation variant does not fire at all for a name that already has the apostrophe ("Glenary\'s" itself stays a 2-request lookup, not 3+)', async () => {
+  let nominatimQueries = [];
+  const fetchImpl = async (url) => {
+    const parsed = new URL(url);
+    if (url.includes('nominatim')) {
+      nominatimQueries.push(parsed.searchParams.get('q'));
+      return jsonResponse([rawNominatim({ name: "Glenary's", city: 'Darjeeling', country: 'India', osmClass: 'amenity', importance: 0.35 })]);
+    }
+    if (url.includes('wbsearchentities')) return jsonResponse({ search: [] });
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+  await lookupPlace({ name: "Glenary's", locationName: 'Darjeeling' }, { fetchImpl, now: () => 4060000 });
+  assert.equal(nominatimQueries.length, 2, 'only the contextual + bare-name queries should fire — "Glenary\'s" already ends in \'s, not a bare trailing s, so buildPunctuationVariant must return null and add no extra request');
+});
+
+await test('the spelling variant does not fire at all for a name with no doubled vowel ("Tiger Hill" stays a 2-request lookup)', async () => {
+  let nominatimQueries = [];
+  const fetchImpl = async (url) => {
+    const parsed = new URL(url);
+    if (url.includes('nominatim')) {
+      nominatimQueries.push(parsed.searchParams.get('q'));
+      return jsonResponse([rawNominatim({ name: 'Tiger Hill', city: 'Darjeeling', country: 'India', osmClass: 'natural', importance: 0.4 })]);
+    }
+    if (url.includes('wbsearchentities')) return jsonResponse({ search: [] });
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+  await lookupPlace({ name: 'Tiger Hill', locationName: 'Darjeeling' }, { fetchImpl, now: () => 4070000 });
+  assert.equal(nominatimQueries.length, 2, 'no "oo" in "Tiger Hill" — buildSpellingVariant must return null and add no extra request');
+});
+
+await test('a name spelled with the already-correct "Ghum" spelling does not trigger a redundant spelling-variant request', async () => {
+  let nominatimQueries = [];
+  const fetchImpl = async (url) => {
+    const parsed = new URL(url);
+    if (url.includes('nominatim')) {
+      nominatimQueries.push(parsed.searchParams.get('q'));
+      return jsonResponse([rawNominatim({ name: 'Ghum railway station', city: 'Ghoom', country: 'India', osmClass: 'railway', importance: 0.15 })]);
+    }
+    if (url.includes('wbsearchentities')) return jsonResponse({ search: [] });
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+  await lookupPlace({ name: 'Ghum Railway Station', locationName: 'Ghoom' }, { fetchImpl, now: () => 4080000 });
+  // "Ghum" has no "oo" to collapse, so buildSpellingVariant('Ghum
+  // Railway Station') is null — only the contextual + bare-name
+  // queries fire.
+  assert.equal(nominatimQueries.length, 2, 'a query already using the canonical spelling must not fire a redundant, identical-effect spelling-variant request');
+});
+
+await test('merge/dedup: when the contextual/bare-name queries and a variant query all return the SAME real place, it appears only once in the final results, not duplicated', async () => {
   const sameStation = rawNominatim({ name: 'Tiger Hill', city: 'Darjeeling', country: 'India', osmClass: 'natural', importance: 0.4, lat: '27.01', lon: '88.26' });
   const fetchImpl = mockQueryAware({
     'Tiger Hill, Darjeeling': { nominatimResults: [sameStation] },
@@ -671,7 +750,7 @@ await test('merge/dedup: when the contextual and bare-name queries return DIFFER
   assert.equal(candidates.length, 2, 'two genuinely distinct real places must both be kept, not incorrectly merged just because they share a name');
 });
 
-await test('request behavior: the bare-name Nominatim query is fired only on the FIRST/full-name attempt, never repeated for a fallback attempt', async () => {
+await test('request behavior: discovery variants are fired only on the FIRST/full-name attempt, never repeated for a fallback attempt', async () => {
   let nominatimQueries = [];
   const fetchImpl = async (url) => {
     const parsed = new URL(url);
@@ -684,12 +763,13 @@ await test('request behavior: the bare-name Nominatim query is fired only on the
   };
   await lookupPlace({ name: 'Tiger Hill Observatory', locationName: 'Darjeeling' }, { fetchImpl, now: () => 4300000 });
   // 3 attempts total: "Tiger Hill Observatory" (full name — gets BOTH
-  // the contextual AND bare-name Nominatim queries), "Tiger Hill"
-  // (first fallback — contextual query only), "Tiger" (second
-  // fallback — contextual query only). That's 2 + 1 + 1 = 4 Nominatim
-  // requests, not 5 or 6 — confirming the bare-name query is NOT
+  // the contextual AND bare-name Nominatim queries; no spelling or
+  // punctuation variant applies to this name), "Tiger Hill" (first
+  // fallback — contextual query only), "Tiger" (second fallback —
+  // contextual query only). That's 2 + 1 + 1 = 4 Nominatim requests,
+  // not 5 or 6 — confirming the extra discovery variants are NOT
   // repeated on either fallback tier.
-  assert.equal(nominatimQueries.length, 4, 'bare-name Nominatim must fire once (alongside the contextual query) on the first attempt only, never again on fallback attempts');
+  assert.equal(nominatimQueries.length, 4, 'discovery-variant requests must fire only on the first attempt, never again on fallback attempts');
   assert.ok(nominatimQueries.includes('Tiger Hill Observatory, Darjeeling'));
   assert.ok(nominatimQueries.includes('Tiger Hill Observatory'), 'the bare-name variant of the FULL original name should have been tried');
   assert.ok(nominatimQueries.includes('Tiger Hill, Darjeeling'), 'the first fallback tier still runs its normal contextual query');
@@ -712,68 +792,90 @@ await test('no bare-name request is fired at all when there is no city/destinati
   assert.equal(nominatimQueries.length, 1, 'when the contextual query already equals the bare name (no context was ever appended), firing a second identical request would be pure waste');
 });
 
-console.log('\n5e. Generic-category deweighting in ranking — a distinctive word beats generic category words, even against higher "importance"');
+console.log('\n5e. Plain nameSimilarity + structural category matching — locality-vs-station safety, category words carry real weight, geographic words untouched');
 
-await test('railway/station collision: the correct, low-importance, specifically-named station beats an unrelated, higher-importance, same-category station', () => {
+await test('nameSimilarity is now PLAIN token overlap again — no generic-word deweighting — so a bare locality scores the ordinary, honest overlap against a multi-word query, not an inflated one', () => {
+  const score = nameSimilarity('Ghoom Railway Station', 'Ghoom');
+  assert.ok(Math.abs(score - 1 / 3) < 0.001, `expected the plain, ordinary token-overlap result (~0.333, one of three words shared), got ${score} — this is the direct regression guard for the locality-vs-station safety bug: the previous generic-word-deweighted formula scored this ~0.667, letting a completely different KIND of place (a locality, not a station) look like a near-match`);
+});
+
+await test('railway/station collision: once BOTH the correct station and an unrelated same-category station are discovered, plain name similarity (not deweighting) already tells them apart', () => {
   const candidates = [
     nomCandidate({ name: 'Ghoom railway station', city: 'Ghoom', country: 'India', osmClass: 'railway', importance: 0.15 }),
     nomCandidate({ name: 'Darjeeling railway station', city: 'Darjeeling', country: 'India', osmClass: 'railway', importance: 0.55 }),
   ];
   const ranked = rankCandidates(candidates, { name: 'Ghoom Railway Station', locationName: 'Ghoom' });
-  assert.equal(ranked[0].name, 'Ghoom railway station', 'the station actually named after the searched place must outrank an unrelated, merely more "important" station of the same generic category');
+  assert.equal(ranked[0].name, 'Ghoom railway station', 'the station actually named after the searched place must outrank an unrelated, merely more "important" station of the same category — plain nameSimilarity already gives it a higher score (all 3 words match vs 2 of 3), no deweighting trick needed');
   assert.ok(ranked[0].score > ranked[1].score, 'the win should be decisive, not a near-tie left to chance');
 });
 
-await test('a different generic-category collision (temple) shows the deweighting generalizes beyond the railway/station case', () => {
-  const candidates = [
-    nomCandidate({ name: 'Ganesh Temple', city: 'Pokhara', country: 'Nepal', osmClass: 'amenity', importance: 0.1 }),
-    nomCandidate({ name: 'Central Temple', city: 'Kathmandu', country: 'Nepal', osmClass: 'amenity', importance: 0.6 }),
-  ];
-  const ranked = rankCandidates(candidates, { name: 'Ganesh Temple', locationName: 'Pokhara' });
-  assert.equal(ranked[0].name, 'Ganesh Temple', 'the distinctively-named match must beat a same-category, higher-importance, unrelated place');
-});
-
-await test('generic-word deweighting still allows an EXACT match to score a perfect 1 (no regression for the common case)', () => {
+await test('exact match still scores a perfect 1 (plain formula, no regression for the common case)', () => {
   assert.equal(nameSimilarity('Ganesh Temple', 'Ganesh Temple'), 1);
   assert.equal(nameSimilarity('Ghoom Railway Station', 'Ghoom Railway Station'), 1);
 });
 
-await test('geographic-feature words like "Hill" are NOT deweighted — they can be the distinctive part of a real proper name', () => {
-  // "Tiger Hill" vs a DIFFERENT, unrelated hill should score
-  // meaningfully lower than "Tiger Hill" vs itself — if "Hill" were
-  // generic-deweighted like "Station"/"Temple" are, sharing only
-  // "Hill" would count for almost nothing, making it easy to conflate
-  // with an exact match. Un-deweighted, one shared word out of two
-  // ("Hill") lands at a clear, honest partial overlap (0.5) rather
-  // than either near-1 (which would wrongly suggest a strong match) or
-  // near-0 (which would wrongly suggest "Hill" carries no information
-  // at all, when for a real place name it usually does).
+await test('geographic-feature words like "Hill" are treated as ordinary, fully-weighted tokens — "Tiger Hill" is unaffected by any category mechanism', () => {
   const exact = nameSimilarity('Tiger Hill', 'Tiger Hill');
   const differentHill = nameSimilarity('Tiger Hill', 'Elephant Hill');
   assert.equal(exact, 1);
-  assert.equal(differentHill, 0.5, `"Hill" un-deweighted should count as a full, ordinary token match, landing at a plain 50% overlap for two otherwise-unrelated hills (got ${differentHill})`);
+  assert.equal(differentHill, 0.5, `"Hill" is a plain, fully-weighted token like any other — one of two words shared lands at an honest 50% overlap (got ${differentHill})`);
   assert.ok(differentHill < exact, 'the exact match must still clearly outrank the different-hill match');
 });
 
-console.log('\n5f. Fallback transparency data — matchedName correctly reflects a broader search when one was needed');
+console.log('\n5f. Category matching stays structural (categoryScore/osmClass/CATEGORY_HINTS), never inside name similarity');
 
-await test('matchedName equals the original name when the bare-name Nominatim query (not a fallback) is what found the result', async () => {
-  const fetchImpl = mockQueryAware({
-    'Ghoom Railway Station, Ghoom': { nominatimResults: [] },
-    'Ghoom Railway Station': { nominatimResults: [rawNominatim({ name: 'Ghoom railway station', city: 'Ghoom', country: 'India', osmClass: 'railway', importance: 0.15 })] },
-  });
-  const { matchedName } = await lookupPlace({ name: 'Ghoom Railway Station', locationName: 'Ghoom' }, { fetchImpl, now: () => 4500000 });
-  assert.equal(matchedName, 'Ghoom Railway Station', 'the bare-name Nominatim query is a parallel DISCOVERY mechanism on the same attempt, not a fallback to a different/broader name — matchedName should still equal exactly what was typed');
+await test('CATEGORY_HINTS.attraction includes "railway" — a legitimate railway station is a reasonable attraction, not an automatic category mismatch', () => {
+  assert.ok(CATEGORY_HINTS.attraction.classes.includes('railway'), 'a real, correctly-tagged railway station/landmark should not be penalized as "wrong category" for an Attractions search');
 });
 
-await test('matchedName reflects the broader fallback name when a genuine word-dropping fallback is what succeeded (regression fixture for PlaceLookup.jsx\'s UI indication)', async () => {
+await test('a railway-class candidate is NOT penalized as wrong-category for an attraction lookup (categoryScore, not name similarity, carries this signal)', () => {
+  const candidates = [nomCandidate({ name: 'Ghoom railway station', city: 'Ghoom', country: 'India', osmClass: 'railway', importance: 0.15 })];
+  const ranked = rankCandidates(candidates, { name: 'Ghoom Railway Station', locationName: 'Ghoom', expectedCategory: CATEGORY_HINTS.attraction });
+  assert.equal(ranked[0].categoryScore, 1, 'railway is now a recognized attraction-relevant OSM class, so an exact-category match should score the full 1, not the "wrong category" 0.2 penalty');
+});
+
+console.log('\n5g. Fallback transparency data — matchedName and matchedViaEntityTypeDrop correctly reflect broader searches vs. alternative discovery');
+
+await test('matchedName equals the original name when a discovery variant (not a fallback) is what found the result', async () => {
+  const fetchImpl = mockQueryAware({
+    'Ghoom Railway Station, Ghoom': { nominatimResults: [] },
+    'Ghoom Railway Station': { nominatimResults: [] },
+    'Ghum Railway Station, Ghoom': { nominatimResults: [rawNominatim({ name: 'Ghum railway station', city: 'Ghoom', country: 'India', osmClass: 'railway', importance: 0.15 })] },
+  });
+  const { matchedName, matchedViaEntityTypeDrop } = await lookupPlace({ name: 'Ghoom Railway Station', locationName: 'Ghoom' }, { fetchImpl, now: () => 4500000 });
+  assert.equal(matchedName, 'Ghoom Railway Station', 'a discovery-variant Nominatim query is a parallel DISCOVERY mechanism on the same attempt, not a fallback to a different/broader name — matchedName should still equal exactly what was typed');
+  assert.equal(matchedViaEntityTypeDrop, false, 'nothing was dropped, so this must never be flagged as an entity-type-changing broadening');
+});
+
+await test('matchedName reflects the broader fallback name AND matchedViaEntityTypeDrop is true when the dropped word is an entity-type word (Tiger Hill Observatory -> Tiger Hill drops "observatory")', async () => {
   const fetchImpl = mockQueryAware({
     'Tiger Hill Observatory, Darjeeling': { nominatimResults: [] },
     'Tiger Hill Observatory': { nominatimResults: [] },
     'Tiger Hill, Darjeeling': { nominatimResults: [rawNominatim({ name: 'Tiger Hill', city: 'Darjeeling', country: 'India', osmClass: 'natural', importance: 0.4 })] },
   });
-  const { matchedName } = await lookupPlace({ name: 'Tiger Hill Observatory', locationName: 'Darjeeling' }, { fetchImpl, now: () => 4600000 });
+  const { matchedName, matchedViaEntityTypeDrop } = await lookupPlace({ name: 'Tiger Hill Observatory', locationName: 'Darjeeling' }, { fetchImpl, now: () => 4600000 });
   assert.equal(matchedName, 'Tiger Hill', 'PlaceLookup.jsx compares this against the originally-typed name to decide whether to show its "broader search" indication');
+  assert.equal(matchedViaEntityTypeDrop, true, '"observatory" is an entity-type word (see ENTITY_TYPE_WORDS) — dropping it changes what KIND of place is being asked for, so this must be flagged for a stronger UI caution');
+});
+
+await test('matchedViaEntityTypeDrop is FALSE when only a non-entity-type word was dropped ("Tiger Hill Nearby" -> "Tiger Hill" drops only the trailing "nearby")', async () => {
+  const fetchImpl = mockQueryAware({
+    'Tiger Hill Nearby, Darjeeling': { nominatimResults: [] },
+    'Tiger Hill Nearby': { nominatimResults: [] },
+    'Tiger Hill, Darjeeling': { nominatimResults: [rawNominatim({ name: 'Tiger Hill', city: 'Darjeeling', country: 'India', osmClass: 'natural', importance: 0.4 })] },
+  });
+  const { matchedName, matchedViaEntityTypeDrop } = await lookupPlace({ name: 'Tiger Hill Nearby', locationName: 'Darjeeling' }, { fetchImpl, now: () => 4650000 });
+  assert.equal(matchedName, 'Tiger Hill');
+  assert.equal(matchedViaEntityTypeDrop, false, '"nearby" is an ordinary descriptive word, not an entity-type word — this fallback should NOT get the stronger caution');
+});
+
+await test('matchedViaEntityTypeDrop is FALSE for a direct (non-fallback) match — "Tiger Hill" searched directly is completely unaffected', async () => {
+  const fetchImpl = mockQueryAware({
+    'Tiger Hill, Darjeeling': { nominatimResults: [rawNominatim({ name: 'Tiger Hill', city: 'Darjeeling', country: 'India', osmClass: 'natural', importance: 0.4 })] },
+  });
+  const { matchedName, matchedViaEntityTypeDrop } = await lookupPlace({ name: 'Tiger Hill', locationName: 'Darjeeling' }, { fetchImpl, now: () => 4700000 });
+  assert.equal(matchedName, 'Tiger Hill');
+  assert.equal(matchedViaEntityTypeDrop, false);
 });
 
 console.log('\n5c. buildConfirmedPlace() — preserve the known Dossier City; route provider admin detail into Area/locality, never into a new City');

@@ -13,6 +13,10 @@
 .place-lookup__hint--broader {
   color: var(--color-teal-dark, var(--color-teal));
 }
+.place-lookup__hint--caution {
+  color: var(--color-danger, #b91c1c);
+  font-weight: 600;
+}
 
 .place-lookup__results {
   display: flex;
