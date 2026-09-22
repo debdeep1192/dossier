@@ -21,6 +21,7 @@ import {
   buildContextualQuery,
   buildFallbackNames,
   buildConfirmedPlace,
+  buildEntityTypeSynonymVariant,
   nameSimilarity,
   rankCandidates,
   mergeCandidates,
@@ -287,6 +288,46 @@ await test('a Wikidata result with no coordinates and no strong name match is NO
   assert.equal(merged.length, 2);
 });
 
+console.log('\n4b. Merge name preservation — the Ghum/Ghoom scenario: keep Nominatim\'s structured data, but use the more informative name');
+
+await test('when merged, the Nominatim candidate keeps ALL its structured data (displayName, coordinates, addressCity, addressCountry, osmClass, importance) — only `name` can change', () => {
+  const wikidata = [wdCandidate({ name: 'Ghum railway station', lat: 27.008643, lng: 88.254223 })];
+  const nominatim = [nomCandidate({ name: 'Ghoom', city: 'Ghoom', country: 'India', osmClass: 'railway', importance: 0.15, lat: 27.0083, lng: 88.254 })];
+  const merged = mergeCandidates(wikidata, nominatim, 'Ghum Railway station');
+  assert.equal(merged.length, 1);
+  const c = merged[0];
+  assert.equal(c.source, 'nominatim', 'the kept candidate is still the Nominatim one — this is a name substitution, not a wholesale swap of which source is used');
+  assert.equal(c.name, 'Ghum railway station', 'the more informative Wikidata name should be used, since it matches the searched query far better than the bare locality name "Ghoom" does');
+  assert.equal(c.addressCity, 'Ghoom', "Nominatim's own structured address data is untouched");
+  assert.equal(c.addressCountry, 'India');
+  assert.equal(c.osmClass, 'railway');
+  assert.equal(c.importance, 0.15);
+  assert.equal(c.lat, 27.0083, "Nominatim's own coordinates are kept, not overwritten by Wikidata's");
+  assert.equal(c.lng, 88.254);
+});
+
+await test('when Nominatim\'s own name is already an equal-or-better match to the query than Wikidata\'s, it is kept unchanged (this is a real comparison, not "always prefer Wikidata")', () => {
+  const wikidata = [wdCandidate({ name: 'Tiger Hill, Darjeeling', lat: 27.0, lng: 88.25 })];
+  const nominatim = [nomCandidate({ name: 'Tiger Hill', city: 'Darjeeling', country: 'India', osmClass: 'natural', importance: 0.4, lat: 27.0001, lng: 88.2501 })];
+  const merged = mergeCandidates(wikidata, nominatim, 'Tiger Hill');
+  assert.equal(merged[0].name, 'Tiger Hill', 'Nominatim\'s exact-match name should win over Wikidata\'s longer, less-exact label');
+});
+
+await test('with no queryName argument at all (e.g. the discovery-variant merge inside fetchRound, which has no Wikidata side to compare), the Nominatim name is always kept exactly as before — fully backward compatible with every existing 2-argument call', () => {
+  const wikidata = [wdCandidate({ name: 'Ghum railway station', lat: 27.008643, lng: 88.254223 })];
+  const nominatim = [nomCandidate({ name: 'Ghoom', city: 'Ghoom', country: 'India', osmClass: 'railway', importance: 0.15, lat: 27.0083, lng: 88.254 })];
+  const merged = mergeCandidates(wikidata, nominatim); // no third argument
+  assert.equal(merged[0].name, 'Ghoom', 'without a query to judge "more informative" against, nothing should change from the existing behavior');
+});
+
+await test('a non-duplicate Wikidata candidate (kept as its own entry, not merged into anything) is never touched by the name-preference logic', () => {
+  const wikidata = [wdCandidate({ name: 'Some Obscure Shrine', lat: 27.5, lng: 88.5 })]; // far from the Nominatim candidate below
+  const nominatim = [nomCandidate({ name: 'Completely Different Place', city: 'Kandy', importance: 0.3, lat: 7.29, lng: 80.64 })];
+  const merged = mergeCandidates(wikidata, nominatim, 'Some Obscure Shrine');
+  assert.equal(merged.length, 2);
+  assert.equal(merged.find(c => c.source === 'wikidata').name, 'Some Obscure Shrine', 'a non-duplicate Wikidata candidate keeps its own name unchanged — the substitution logic only ever applies to an actual merged duplicate pair');
+});
+
 console.log('\n5. lookupPlace() — merged Wikidata + Nominatim network behaviour, all via a mocked fetchImpl');
 
 await test('the "Sacred Tooth Temple" / Kandy scenario: Wikidata alias matching surfaces the correct entity', async () => {
@@ -491,6 +532,31 @@ await test('a blank/whitespace-only name produces no fallbacks', () => {
   assert.deepEqual(buildFallbackNames('   '), []);
 });
 
+console.log('\n5a2. buildEntityTypeSynonymVariant() — the deterministic "zoo" -> "zoological park" discovery variant');
+
+await test('a bare "zoo" query produces the "zoological park" variant', () => {
+  assert.equal(buildEntityTypeSynonymVariant('zoo'), 'zoological park');
+});
+
+await test('the synonym is substituted in place, preserving the rest of a multi-word name', () => {
+  assert.equal(buildEntityTypeSynonymVariant('Darjeeling zoo'), 'Darjeeling zoological park');
+});
+
+await test('matching is case-insensitive on the word itself', () => {
+  assert.equal(buildEntityTypeSynonymVariant('Zoo'), 'zoological park');
+  assert.equal(buildEntityTypeSynonymVariant('ZOO'), 'zoological park');
+});
+
+await test('matching is WORD-BOUNDARY safe — a name that merely contains "zoo" as a substring is untouched', () => {
+  assert.equal(buildEntityTypeSynonymVariant('Zootopia Cafe'), null, 'the word-boundary regex must not match "zoo" inside "Zootopia"');
+});
+
+await test('a name with no entity-type synonym at all returns null (no extra request generated)', () => {
+  assert.equal(buildEntityTypeSynonymVariant('Tiger Hill'), null);
+  assert.equal(buildEntityTypeSynonymVariant(''), null);
+  assert.equal(buildEntityTypeSynonymVariant(null), null);
+});
+
 console.log('\n5b. lookupPlace() fallback retry — the actual "Tiger Hill Observatory" / "Glenary\'s" bug scenarios');
 await test('Tiger Hill Observatory: the full query legitimately finds nothing, but the "Tiger Hill" fallback finds the real place', async () => {
   const fetchImpl = mockQueryAware({
@@ -612,7 +678,7 @@ await test('a real network failure on the first attempt stops immediately — it
   assert.equal(callCount, 3, 'a genuine failure (not just an empty result) must not trigger fallback retries — only 1 round should fire, now with 3 requests (contextualized + bare-name Nominatim, plus Wikidata) instead of 2');
 });
 
-console.log('\n5d. Discovery-variant Nominatim requests — bare name, spelling variant, punctuation variant');
+console.log('\n5d. Discovery-variant Nominatim requests — bare name, spelling variant, punctuation variant, entity-type synonym');
 
 await test('spelling variant discovery: the contextual AND bare-name queries find nothing, but the "oo"->"u" spelling variant finds the real place (the Ghoom/Ghum Railway Station scenario)', async () => {
   const fetchImpl = mockQueryAware({
@@ -748,6 +814,77 @@ await test('merge/dedup: when the contextual and bare-name queries return DIFFER
   );
   assert.equal(error, null);
   assert.equal(candidates.length, 2, 'two genuinely distinct real places must both be kept, not incorrectly merged just because they share a name');
+});
+
+await test('the "zoo" scenario end-to-end: "zoo" alone finds nothing, but the "zoological park" synonym variant discovers Padmaja Naidu Himalayan Zoological Park', async () => {
+  const fetchImpl = mockQueryAware({
+    // The plain word "zoo" genuinely returns nothing — this matches
+    // live provider testing: Nominatim has no useful match for the
+    // bare word "zoo" as a query.
+    'zoo, Darjeeling': { nominatimResults: [] },
+    'zoo': { nominatimResults: [] },
+    // The entity-type-synonym variant, WITH the same city/destination
+    // context the primary query already carried, succeeds — this is
+    // the concrete, investigated case: "zoological park" is the term
+    // the real facility's own data actually uses.
+    'zoological park, Darjeeling': {
+      nominatimResults: [rawNominatim({ name: 'Padmaja Naidu Himalayan Zoological Park', city: 'Darjeeling', country: 'India', osmClass: 'tourism', importance: 0.4 })],
+    },
+  });
+  const { candidates, error, matchedName, matchedViaEntityTypeDrop } = await lookupPlace(
+    { name: 'zoo', locationName: 'Darjeeling', destinationName: 'Darjeeling' },
+    { fetchImpl, now: () => 4250000 },
+  );
+  assert.equal(error, null);
+  assert.ok(candidates.length > 0, 'the entity-type synonym variant should surface the real zoo even though the bare "zoo" query found nothing');
+  assert.equal(candidates[0].name, 'Padmaja Naidu Himalayan Zoological Park');
+  assert.equal(matchedName, 'zoo', 'this is alternative DISCOVERY of the same requested word, not a fallback to a different/broader name — matchedName must stay exactly what was typed');
+  assert.equal(matchedViaEntityTypeDrop, false, 'nothing was dropped — the synonym is an additional query, not a narrowing of the original one');
+});
+
+await test('the synonym variant keeps city/destination CONTEXT, unlike the bare-name variant (it uses the existing contextual Nominatim mechanism, per the requirement)', async () => {
+  let synonymQuerySeen = null;
+  const fetchImpl = async (url) => {
+    const parsed = new URL(url);
+    if (url.includes('nominatim')) {
+      const q = parsed.searchParams.get('q');
+      if (q.includes('zoological park')) synonymQuerySeen = q;
+      return jsonResponse([]);
+    }
+    if (url.includes('wbsearchentities')) return jsonResponse({ search: [] });
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+  await lookupPlace({ name: 'zoo', locationName: 'Darjeeling', destinationName: 'Darjeeling' }, { fetchImpl, now: () => 4260000 });
+  assert.equal(synonymQuerySeen, 'zoological park, Darjeeling', 'the synonym variant must be built through the same buildContextualQuery mechanism as the primary query — carrying locationName/destinationName, not a bare/context-free string');
+});
+
+await test('no entity-type-synonym request fires for a query with no matching entity-type word (bounded request growth)', async () => {
+  let nominatimQueries = [];
+  const fetchImpl = async (url) => {
+    const parsed = new URL(url);
+    if (url.includes('nominatim')) { nominatimQueries.push(parsed.searchParams.get('q')); return jsonResponse([rawNominatim({ name: 'Tiger Hill', city: 'Darjeeling', country: 'India', osmClass: 'natural', importance: 0.4 })]); }
+    if (url.includes('wbsearchentities')) return jsonResponse({ search: [] });
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+  await lookupPlace({ name: 'Tiger Hill', locationName: 'Darjeeling' }, { fetchImpl, now: () => 4270000 });
+  assert.equal(nominatimQueries.length, 2, 'no "zoo" (or any other mapped entity-type word) in "Tiger Hill" — buildEntityTypeSynonymVariant must return null and add no extra request');
+});
+
+await test('the entity-type-synonym request is fired only on the FIRST attempt, never repeated for a fallback attempt', async () => {
+  let nominatimQueries = [];
+  const fetchImpl = async (url) => {
+    const parsed = new URL(url);
+    if (url.includes('nominatim')) { nominatimQueries.push(parsed.searchParams.get('q')); return jsonResponse([]); }
+    if (url.includes('wbsearchentities')) return jsonResponse({ search: [] });
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+  // "Darjeeling zoo view" is a 3-word name so it has 2 fallback tiers
+  // ("Darjeeling zoo", "Darjeeling") — the first of which ALSO
+  // contains "zoo" and could, if the discipline were wrong, trigger
+  // its own synonym request too.
+  await lookupPlace({ name: 'Darjeeling zoo view', locationName: 'Darjeeling' }, { fetchImpl, now: () => 4280000 });
+  const synonymQueries = nominatimQueries.filter(q => q.includes('zoological park'));
+  assert.equal(synonymQueries.length, 1, 'the entity-type-synonym variant must fire once, on the first attempt only — never again on the "Darjeeling zoo" fallback tier even though it also contains "zoo"');
 });
 
 await test('request behavior: discovery variants are fired only on the FIRST/full-name attempt, never repeated for a fallback attempt', async () => {

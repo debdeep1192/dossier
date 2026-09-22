@@ -153,6 +153,58 @@ export function buildPunctuationVariant(name) {
   return `${match[1]}'s`;
 }
 
+// A SMALL, fixed map of entity-type words (see ENTITY_TYPE_WORDS
+// below) to a more provider-friendly synonym, used only by
+// buildEntityTypeSynonymVariant() for a bounded, deterministic
+// discovery query — never for ranking/display, and never a general
+// synonym/thesaurus mechanism. The only entry today is the one
+// concretely investigated and confirmed: live provider testing showed
+// Nominatim returns nothing useful for "zoo" as a query word, but
+// does return the real place for "zoological park" — the formal term
+// actually used in the real facility's own name/OSM tagging. Adding
+// further entries requires the same kind of concrete, investigated
+// justification — this is deliberately not a place to speculatively
+// grow a general vocabulary.
+const ENTITY_TYPE_DISCOVERY_SYNONYMS = {
+  zoo: 'zoological park',
+};
+
+/**
+ * A single, deterministic DISCOVERY-QUERY variant: replaces a whole,
+ * standalone entity-type word (see ENTITY_TYPE_DISCOVERY_SYNONYMS
+ * above) with a more provider-friendly synonym for the search request
+ * only — e.g. "zoo" -> "zoological park", "Darjeeling zoo" ->
+ * "Darjeeling zoological park". This exists for exactly the same
+ * reason buildSpellingVariant/buildPunctuationVariant do: the
+ * provider's own indexed text can differ from the word a person
+ * naturally types, and trying the provider-preferred term as an
+ * ADDITIONAL query (never a replacement of what's shown/ranked) can
+ * surface a real result the original query alone would miss.
+ *
+ * Deliberately narrow and word-boundary-safe: only a whole word is
+ * replaced (a regex word boundary on both sides), so this never
+ * mangles a word that merely CONTAINS "zoo" as a substring (e.g. it
+ * would not touch a hypothetical place name like "Zootopia Cafe").
+ * Only ONE synonym per query is substituted per call — matching the
+ * "small, deterministic, no explosion" discipline every other variant
+ * builder in this file follows; this is not a general
+ * find-and-replace-every-match utility.
+ *
+ * Returns null when no entity-type word from the synonym map appears
+ * in the name at all — callers use this to decide whether the extra
+ * discovery request is worth making.
+ */
+export function buildEntityTypeSynonymVariant(name) {
+  if (!name) return null;
+  for (const [word, synonym] of Object.entries(ENTITY_TYPE_DISCOVERY_SYNONYMS)) {
+    const pattern = new RegExp(`\\b${word}\\b`, 'i');
+    if (pattern.test(name)) {
+      return name.replace(pattern, synonym);
+    }
+  }
+  return null;
+}
+
 /**
  * Builds the contextual query Nominatim uses: "<name>, <city/location>,
  * <country/destination>" — omitting any part that's blank, AND
@@ -451,16 +503,39 @@ export function rankCandidates(candidates, { name, locationName, destinationName
  * that plausibly refer to the same real-world place — a name-similar
  * pair within ~1km of each other (both coordinates present), or an
  * exact-enough name match when one side has no coordinates at all.
- * When a duplicate is found, the Nominatim version is kept (it has a
- * fuller structured address for locality/city display), but this
- * happens AFTER ranking — see lookupPlace() — so which candidate
- * "wins" a duplicate pair never depends on which source found it,
- * only on which one is actually more complete for display purposes.
+ * When a duplicate is found, the NOMINATIM version is kept as the
+ * base candidate (it has a fuller structured address for
+ * locality/city display — see buildConfirmedPlace) — but its `name`
+ * field is replaced with whichever of the two names is actually the
+ * more informative match to what was searched (see `queryName`
+ * below), so a real, structural difference in what each source
+ * happened to call the place doesn't silently hide the more useful
+ * one. Every other field (displayName, lat, lng, addressCity,
+ * addressCountry, osmClass, importance) always stays Nominatim's,
+ * unconditionally — this is a name-only substitution, never a
+ * wholesale swap of which source's data is used.
+ *
+ * Concretely, this is what lets a station that Nominatim's own
+ * address data calls "Ghoom" (its containing locality's spelling) but
+ * whose real Wikidata label is "Ghum railway station" surface the
+ * latter — the more specific, more informative name — as `name`,
+ * while every geographic/category field the person actually depends
+ * on (coordinates, address, category) still comes from Nominatim's
+ * fuller structured data, unchanged.
+ *
+ * `queryName` (optional) is the original name the person typed — used
+ * ONLY to judge "more informative" via the existing nameSimilarity()
+ * (the same signal ranking itself uses, not a new heuristic). When
+ * omitted (e.g. the fetchRound() call site below, which merges two
+ * Nominatim-sourced lists and has no Wikidata side to compare against
+ * at all), the Nominatim name is always kept exactly as before — this
+ * substitution only ever applies to an actual Wikidata/Nominatim
+ * duplicate pair.
  */
-export function mergeCandidates(wikidataCandidates, nominatimCandidates) {
+export function mergeCandidates(wikidataCandidates, nominatimCandidates, queryName) {
   const merged = [...nominatimCandidates];
   for (const wd of wikidataCandidates) {
-    const duplicate = nominatimCandidates.find(nom => {
+    const duplicateIndex = merged.findIndex(nom => {
       // Same real place is decided primarily by PROXIMITY, not name —
       // this is deliberate: the whole point of the Wikidata alias pass
       // is to find places whose name differs from what Nominatim/OSM
@@ -476,7 +551,20 @@ export function mergeCandidates(wikidataCandidates, nominatimCandidates) {
       // same-named places purely on text.
       return nameSimilarity(wd.name, nom.name) >= 0.8;
     });
-    if (!duplicate) merged.push(wd);
+    if (duplicateIndex === -1) {
+      merged.push(wd);
+      continue;
+    }
+    // A real duplicate — keep the Nominatim candidate as the base
+    // (unchanged structured data), but swap in whichever name is the
+    // more informative match to the original query, when we have a
+    // query to judge that against.
+    if (queryName) {
+      const nom = merged[duplicateIndex];
+      if (nameSimilarity(queryName, wd.name) > nameSimilarity(queryName, nom.name)) {
+        merged[duplicateIndex] = { ...nom, name: wd.name };
+      }
+    }
   }
   return merged;
 }
@@ -569,7 +657,15 @@ async function fetchWikidataCandidates(name, fetchImpl, signal) {
  *     collapse, e.g. "Ghoom" -> "Ghum";
  *   - a PUNCTUATION variant (see buildPunctuationVariant) — a missing
  *     possessive apostrophe restored in its one structurally-valid
- *     position, e.g. "Glenarys" -> "Glenary's".
+ *     position, e.g. "Glenarys" -> "Glenary's";
+ *   - an ENTITY-TYPE SYNONYM variant (see buildEntityTypeSynonymVariant)
+ *     — a whole entity-type word swapped for a more provider-friendly
+ *     synonym, e.g. "zoo" -> "zoological park". Unlike the bare-name
+ *     variant, this ONE keeps the city/destination context (built via
+ *     the same buildContextualQuery as the primary query) — the
+ *     underlying problem here isn't word-boundary parsing, it's that
+ *     the query word itself doesn't match what the provider's data
+ *     actually calls the category of place.
  *
  * Every variant is generated from the NAME (not the already-built
  * contextualized `query` string) and then re-contextualized with
@@ -638,10 +734,22 @@ async function fetchRound(name, query, fetchImpl, signal, { includeExtraVariants
     const trimmedName = (name || '').trim();
     const spellingVariantName = buildSpellingVariant(trimmedName);
     const punctuationVariantName = buildPunctuationVariant(trimmedName);
+    const synonymVariantName = buildEntityTypeSynonymVariant(trimmedName);
     const candidates = [
       trimmedName, // the bare name, no city/destination context
       spellingVariantName ? buildContextualQuery({ name: spellingVariantName, locationName, destinationName }) : null,
       punctuationVariantName ? buildContextualQuery({ name: punctuationVariantName, locationName, destinationName }) : null,
+      // The entity-type-synonym variant keeps context (unlike the
+      // bare-name variant above) — it uses the EXISTING contextual
+      // Nominatim mechanism, just with the query word swapped for a
+      // more provider-friendly synonym (see
+      // buildEntityTypeSynonymVariant's own doc comment for why: a
+      // bare, unqualified "zoo" is ambiguous/underspecified for
+      // Nominatim, but "zoological park" — the term the real facility
+      // actually uses — combined with the SAME city/destination
+      // context the primary query already carries, is what live
+      // testing showed actually finds it).
+      synonymVariantName ? buildContextualQuery({ name: synonymVariantName, locationName, destinationName }) : null,
     ].filter(Boolean);
     const seen = new Set([query.trim().toLowerCase()]);
     for (const c of candidates) {
@@ -806,7 +914,7 @@ export async function lookupPlace({ name, locationName, destinationName, expecte
       return { candidates: [], error: null }; // a genuine zero-result search from both sources is not an error
     }
 
-    const merged = mergeCandidates(wikidataCandidates, nominatimCandidates);
+    const merged = mergeCandidates(wikidataCandidates, nominatimCandidates, name);
     // Ranking always scores against the FULL name the person actually
     // typed, even when a shortened fallback variant is what produced
     // results — a candidate found via the "Tiger Hill" fallback still
