@@ -16,6 +16,9 @@ import SourcesPage from './pages/SourcesPage';
 import CurrencySettingsPage from './pages/CurrencySettingsPage';
 import ImportPage from './pages/ImportPage';
 import ReviewPage from './pages/ReviewPage';
+import PeoplePage from './pages/PeoplePage';
+import PlanningsPage from './pages/PlanningsPage';
+import PlanningDetailPage from './pages/PlanningDetailPage';
 
 // No global loading gate: IndexedDB opens near-instantly (no engine to
 // boot, unlike the old PGlite architecture), so there's no meaningful
@@ -43,6 +46,17 @@ export default function App() {
           <Route path="/destinations/:destinationId/currency" element={<CurrencySettingsPage />} />
           <Route path="/destinations/:destinationId/import" element={<ImportPage />} />
           <Route path="/destinations/:destinationId/review/:intakeId" element={<ReviewPage />} />
+          {/* Tour Planning, Chunk 1 — People and Plannings are
+              top-level entities (a Planning references one destination
+              but Plannings themselves aren't nested under it), so
+              these are siblings of "/" rather than under
+              /destinations/:destinationId, same reasoning as Home
+              itself. /plannings/new before /plannings/:planningId so
+              the literal path always wins over the param match. */}
+          <Route path="/people" element={<PeoplePage />} />
+          <Route path="/plannings" element={<PlanningsPage />} />
+          <Route path="/plannings/new" element={<PlanningDetailPage />} />
+          <Route path="/plannings/:planningId" element={<PlanningDetailPage />} />
         </Routes>
       </AppShell>
     </BrowserRouter>

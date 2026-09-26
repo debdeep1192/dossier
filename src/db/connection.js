@@ -41,7 +41,37 @@ const DB_NAME = 'dossier';
 // added to THEIR OWN shape only (not to commonMetadata — see
 // shared.js), so sections that never use journeys are completely
 // unaffected. Also purely additive; no existing store or field changes.
-const DB_VERSION = 5;
+// v5 -> v6: added the `people` store (a reusable, destination-independent
+// traveller list — see db/stores/people.js) and the `plannings` store
+// (Tour Planning, Chunk 1 — see db/stores/plannings.js). Neither store
+// is a Research section: `people` has no `destinationId` at all (a
+// person is reusable across every destination/Planning), and
+// `plannings` references an existing destinationId by convention only,
+// exactly like every other cross-store reference in this app. Nothing
+// about any existing Research store, field, or record changes. Purely
+// additive, same "create store if missing" pattern as every prior bump.
+// v6 -> v7: added the `timelineItems` store (Tour Planning, Chunk 2 —
+// see db/stores/timelineItems.js). A timeline item is the scheduled
+// content of one Planning day: travel, attraction, meal, accommodation,
+// free time, or a custom entry, optionally referencing an existing
+// Research record by type+id (never duplicating that record's data —
+// see the Chunk 2 design note in timelineItems.js). Indexed by
+// planningId only (not destinationId — a timeline item belongs to a
+// Planning, which itself already carries the destinationId). Purely
+// additive; no existing store, field, or record changes.
+// v7 -> v8: added `partLabel`, `optionGroupId`, and `optionLabel` to
+// `timelineItems` (additive fields, existing records simply read these
+// as absent/null, meaning "no competing option for this slot" — see
+// the Chunk 3 design note in timelineItems.js), plus two new stores:
+// `planningOptionGroups` (a named, day-part-scoped set of competing
+// Option sequences — Tour Planning, Chunk 3, see
+// db/stores/planningOptionGroups.js) and `itemAlternatives` (Research-
+// or-custom alternatives nested under one specific timelineItems row —
+// see db/stores/itemAlternatives.js). Both new stores follow the same
+// additive "create if missing" pattern as every prior bump; no
+// existing store, field, or record is touched, migrated, or
+// reinterpreted.
+const DB_VERSION = 8;
 
 // One object store per research section (each a genuinely distinct
 // shape defined in db/stores/*.js — never a shared "item_kind" bucket),
@@ -65,6 +95,11 @@ const STORE_DEFS = [
   { name: 'shoppingItems', keyPath: 'id', indexes: [['destinationId', 'destinationId']] },
   { name: 'shops', keyPath: 'id', indexes: [['destinationId', 'destinationId'], ['shoppingItemId', 'shoppingItemId']] },
   { name: 'exchangeRates', keyPath: 'id', indexes: [['pair', 'pair']] },
+  { name: 'people', keyPath: 'id', indexes: [] },
+  { name: 'plannings', keyPath: 'id', indexes: [['destinationId', 'destinationId']] },
+  { name: 'timelineItems', keyPath: 'id', indexes: [['planningId', 'planningId']] },
+  { name: 'planningOptionGroups', keyPath: 'id', indexes: [['planningId', 'planningId']] },
+  { name: 'itemAlternatives', keyPath: 'id', indexes: [['timelineItemId', 'timelineItemId']] },
   { name: 'intakeDocuments', keyPath: 'id', indexes: [['destinationId', 'destinationId']] },
   {
     name: 'candidates',

@@ -31,6 +31,11 @@ import { createJourney, listJourneys, updateJourney, deleteJourney, getJourney, 
 import { createDish, listDishes, updateDish, deleteDish, getDish, linkDishToRestaurant, unlinkDishFromRestaurant, listDishesForRestaurant } from '../stores/dishes.js';
 import { normalizeTransportEntry, updateTransportEntry } from '../stores/transport.js';
 import { getDestinationDefaultCurrency, setDestinationDefaultCurrency } from '../currency.js';
+import { createPerson, listPeople, getPerson, updatePerson, deletePerson } from '../stores/people.js';
+import { createPlanning, listPlannings, getPlanning, updatePlanning, deletePlanning, planningDayCount, planningDayDate, listPlanningDays } from '../stores/plannings.js';
+import { createTimelineItem, listTimelineItems, getTimelineItem, updateTimelineItem, deleteTimelineItem, listTimelineItemsForDay, TIMELINE_ITEM_TYPES, TIMELINE_RESEARCH_REF_TYPES } from '../stores/timelineItems.js';
+import { createOptionGroup, listOptionGroupsForPlanning, getOptionGroup, selectOption, deleteOptionGroup } from '../stores/planningOptionGroups.js';
+import { createItemAlternative, listAlternativesForItem, getItemAlternative, updateItemAlternative, deleteItemAlternative } from '../stores/itemAlternatives.js';
 
 let passed = 0, failed = 0;
 async function test(name, fn) {
@@ -1789,6 +1794,817 @@ await test('a full v1 -> v5 upgrade chain preserves an original Phase-0-era dest
   const loc2 = await createLocation('v1-dest', { name: 'Ghoom' });
   const journey = await createJourney('v1-dest', { fromLocationId: location.id, toLocationId: loc2.id });
   assert.ok(journey.id);
+});
+
+console.log('\n22. People (Tour Planning, Chunk 1 — reusable traveller directory)');
+await test('create, list, get, update, and soft-delete a person', async () => {
+  const alice = await createPerson({ name: 'Alice', dob: '1990-05-14' });
+  assert.ok(alice.id);
+  assert.equal(alice.name, 'Alice');
+  assert.equal(alice.dob, '1990-05-14');
+  assert.equal(alice.deletedAt, null);
+
+  const fetched = await getPerson(alice.id);
+  assert.equal(fetched.name, 'Alice');
+
+  await createPerson({ name: 'Bob', dob: '1985-01-01' });
+  const all = await listPeople();
+  assert.equal(all.length, 2);
+  assert.deepEqual(all.map(p => p.name), ['Alice', 'Bob'], 'listPeople sorts by name');
+
+  const updated = await updatePerson(alice.id, { name: 'Alice Smith' });
+  assert.equal(updated.name, 'Alice Smith');
+  assert.equal(updated.dob, '1990-05-14', 'unrelated fields survive an update untouched');
+
+  await deletePerson(alice.id);
+  assert.equal(await getPerson(alice.id), null, 'a soft-deleted person is no longer returned by getPerson');
+  const afterDelete = await listPeople();
+  assert.equal(afterDelete.length, 1, 'a soft-deleted person is excluded from listPeople');
+  assert.equal(afterDelete[0].name, 'Bob');
+});
+
+await test('DOB is required — a person cannot be created or updated to have no DOB', async () => {
+  await assert.rejects(() => createPerson({ name: 'No Birthday' }), /date of birth/i);
+  await assert.rejects(() => createPerson({ name: 'Empty Birthday', dob: '' }), /date of birth/i);
+  const person = await createPerson({ name: 'Has Birthday', dob: '2000-01-01' });
+  await assert.rejects(() => updatePerson(person.id, { dob: '' }), /date of birth/i);
+});
+
+await test('name is required for a person', async () => {
+  await assert.rejects(() => createPerson({ dob: '2000-01-01' }), /name/i);
+  await assert.rejects(() => createPerson({ name: '  ', dob: '2000-01-01' }), /name/i);
+});
+
+console.log('\n23. Plannings (Tour Planning, Chunk 1 — foundation: no timeline items yet)');
+await test('create, list, get, update, and soft-delete a Planning', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const traveller = await createPerson({ name: 'Priya', dob: '1992-03-20' });
+
+  const planning = await createPlanning(dest.id, {
+    name: 'Northern Sri Lanka, January 2026',
+    startDate: '2026-01-10',
+    endDate: '2026-01-15',
+    notes: 'Focus on Jaffna and the north.',
+    travellerIds: [traveller.id],
+  });
+  assert.ok(planning.id);
+  assert.equal(planning.destinationId, dest.id);
+  assert.equal(planning.name, 'Northern Sri Lanka, January 2026');
+  assert.deepEqual(planning.travellerIds, [traveller.id]);
+  assert.equal(planning.deletedAt, null);
+
+  const fetched = await getPlanning(planning.id);
+  assert.equal(fetched.startDate, '2026-01-10');
+
+  const list = await listPlannings(dest.id);
+  assert.equal(list.length, 1);
+
+  const updated = await updatePlanning(planning.id, { name: 'Renamed Trip' });
+  assert.equal(updated.name, 'Renamed Trip');
+  assert.equal(updated.startDate, '2026-01-10', 'unrelated fields survive an update untouched');
+
+  await deletePlanning(planning.id);
+  assert.equal(await getPlanning(planning.id), null, 'a soft-deleted Planning is no longer returned by getPlanning');
+  assert.equal((await listPlannings(dest.id)).length, 0, 'a soft-deleted Planning is excluded from listPlannings');
+});
+
+await test('a Planning does not duplicate People or Destination data — travellerIds/destinationId are references only', async () => {
+  const dest = await createDestination({ name: 'Japan', overview: 'Cherry blossoms' });
+  const person = await createPerson({ name: 'Kenji', dob: '1988-11-02' });
+  const planning = await createPlanning(dest.id, { name: 'Spring Trip', startDate: '2027-04-01', endDate: '2027-04-05', travellerIds: [person.id] });
+
+  // The Planning record itself carries only ids, never a copy of the
+  // person's or destination's own fields.
+  assert.equal(Object.prototype.hasOwnProperty.call(planning, 'name') && planning.travellerIds.includes(person.id), true);
+  assert.equal(planning.destinationId, dest.id);
+  assert.equal(JSON.stringify(planning).includes('Kenji'), false, 'the traveller\'s name is never copied into the Planning record');
+  assert.equal(JSON.stringify(planning).includes('Cherry blossoms'), false, 'the destination\'s own fields are never copied into the Planning record');
+
+  // Updating the person afterwards doesn't require touching the
+  // Planning at all — proving there's nothing to keep in sync.
+  await updatePerson(person.id, { name: 'Kenji Tanaka' });
+  const stillSame = await getPlanning(planning.id);
+  assert.deepEqual(stillSame.travellerIds, [person.id]);
+});
+
+await test('required-field validation: name, destination, start date, end date', async () => {
+  const dest = await createDestination({ name: 'Peru' });
+  await assert.rejects(() => createPlanning(dest.id, { startDate: '2026-01-01', endDate: '2026-01-05' }), /name/i, 'Planning name is required');
+  await assert.rejects(() => createPlanning('', { name: 'No Destination', startDate: '2026-01-01', endDate: '2026-01-05' }), /destination/i, 'destination is required');
+  await assert.rejects(() => createPlanning(dest.id, { name: 'No Start', endDate: '2026-01-05' }), /start date/i);
+  await assert.rejects(() => createPlanning(dest.id, { name: 'No End', startDate: '2026-01-01' }), /end date/i);
+});
+
+await test('end date cannot be before start date, on create or update', async () => {
+  const dest = await createDestination({ name: 'Vietnam' });
+  await assert.rejects(
+    () => createPlanning(dest.id, { name: 'Backwards Trip', startDate: '2026-05-10', endDate: '2026-05-01' }),
+    /end date cannot be before start date/i,
+  );
+  const planning = await createPlanning(dest.id, { name: 'Valid Trip', startDate: '2026-05-01', endDate: '2026-05-10' });
+  await assert.rejects(
+    () => updatePlanning(planning.id, { endDate: '2026-04-01' }),
+    /end date cannot be before start date/i,
+    'shrinking endDate below the existing startDate via update is also rejected',
+  );
+  // A same-day trip (start === end) is exactly one day and must be valid.
+  const sameDay = await createPlanning(dest.id, { name: 'Day Trip', startDate: '2026-06-01', endDate: '2026-06-01' });
+  assert.equal(planningDayCount(sameDay), 1);
+});
+
+console.log('\n24. Derived Days — no planningDays store, everything computed from startDate/endDate');
+await test('planningDayCount / planningDayDate / listPlanningDays compute days from startDate, never store them', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const planning = await createPlanning(dest.id, { name: '6-day trip', startDate: '2026-01-10', endDate: '2026-01-15' });
+
+  assert.equal(planningDayCount(planning), 6);
+  assert.equal(planningDayDate(planning, 1), '2026-01-10');
+  assert.equal(planningDayDate(planning, 2), '2026-01-11');
+  assert.equal(planningDayDate(planning, 6), '2026-01-15');
+
+  const days = listPlanningDays(planning);
+  assert.equal(days.length, 6);
+  assert.deepEqual(days.map(d => d.dayNumber), [1, 2, 3, 4, 5, 6]);
+  assert.deepEqual(days.map(d => d.date), ['2026-01-10', '2026-01-11', '2026-01-12', '2026-01-13', '2026-01-14', '2026-01-15']);
+
+  // There is genuinely no planningDays store to assert the absence of
+  // in the schema sense — this test instead proves the *behavior* that
+  // matters: days are a pure function of the Planning record, not a
+  // separately persisted, independently-editable thing.
+});
+
+await test('changing startDate shifts every day\'s calendar date while day numbers stay stable — the core Chunk 1 requirement', async () => {
+  const dest = await createDestination({ name: 'Morocco' });
+  const planning = await createPlanning(dest.id, { name: 'Shiftable Trip', startDate: '2026-01-10', endDate: '2026-01-15' });
+
+  const before = listPlanningDays(planning);
+  assert.equal(before[0].date, '2026-01-10', 'Day 1 starts on the original start date');
+  assert.equal(before.find(d => d.dayNumber === 3).date, '2026-01-12', 'Day 3 is 12 Jan before the shift');
+
+  // Move the whole trip two weeks later.
+  const shifted = await updatePlanning(planning.id, { startDate: '2026-01-24', endDate: '2026-01-29' });
+  const after = listPlanningDays(shifted);
+
+  assert.equal(after.length, 6, 'day COUNT is unchanged — only the calendar mapping moved');
+  assert.equal(after[0].dayNumber, 1, 'Day 1 is still Day 1 (day numbers never change)');
+  assert.equal(after[0].date, '2026-01-24', 'but Day 1\'s calendar date has shifted to the new start date');
+  assert.equal(after.find(d => d.dayNumber === 3).date, '2026-01-26', 'Day 3 shifted by the same 14 days, still Day 3');
+});
+
+await test('shortening a Planning\'s dates changes the derived day count without deleting or altering any Planning field', async () => {
+  const dest = await createDestination({ name: 'Iceland' });
+  const planning = await createPlanning(dest.id, { name: 'Long trip', startDate: '2026-01-10', endDate: '2026-01-15' });
+  assert.equal(planningDayCount(planning), 6);
+
+  const shortened = await updatePlanning(planning.id, { endDate: '2026-01-13' });
+  assert.equal(planningDayCount(shortened), 4, 'day count is now derived as 4 from the new, shorter date range');
+  // Chunk 1 has no timeline items yet, so there is no day-content to
+  // prove survives the shortening — that behavior belongs to whichever
+  // later chunk introduces timeline items (see the approved design,
+  // §3: existing content beyond the new range is marked out-of-range,
+  // never deleted). This test only proves the Planning record itself
+  // (name/notes/travellerIds) is untouched by a pure date-range edit.
+  assert.equal(shortened.name, 'Long trip');
+});
+
+console.log('\n25. Database version upgrade to v6 (people + plannings) preserves data through the full chain');
+await test('upgrading a v5 database (journeys exists, people/plannings do not) to v6 adds both new stores without touching existing data', async () => {
+  const v5StoreNames = [
+    'destinations', 'locations', 'journeys', 'sources', 'attractions', 'restaurants', 'dishes', 'accommodations', 'transport',
+    'costs', 'practicalInfo', 'weatherNotes', 'packingNotes', 'generalNotes',
+    'shoppingItems', 'shops', 'exchangeRates', 'intakeDocuments', 'candidates',
+  ];
+  const v5Db = await new Promise((resolve, reject) => {
+    const req = globalThis.indexedDB.open('dossier', 5);
+    req.onupgradeneeded = (event) => {
+      const db = event.target.result;
+      for (const name of v5StoreNames) {
+        const store = db.createObjectStore(name, { keyPath: 'id' });
+        if (!['destinations', 'exchangeRates'].includes(name)) store.createIndex('destinationId', 'destinationId');
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  await new Promise((resolve, reject) => {
+    const tx = v5Db.transaction(['destinations', 'attractions'], 'readwrite');
+    tx.objectStore('destinations').put({ id: 'v5-dest', name: 'Pre-Planning Destination', currencies: [], deletedAt: null });
+    tx.objectStore('attractions').put({ id: 'v5-attraction', destinationId: 'v5-dest', place: { name: 'Old Attraction' }, deletedAt: null });
+    tx.oncomplete = resolve;
+    tx.onerror = reject;
+  });
+  v5Db.close();
+
+  __resetDbForTest();
+  const destination = await getDestination('v5-dest');
+  assert.ok(destination, 'pre-existing v5 destination survives the v5->v6 upgrade');
+
+  const attractions = await listAttractions('v5-dest');
+  assert.equal(attractions.length, 1);
+  assert.equal(attractions[0].place.name, 'Old Attraction');
+
+  // The new stores must now be fully usable against the upgraded database.
+  assert.equal((await listPeople()).length, 0, 'the new people store exists and starts empty');
+  const person = await createPerson({ name: 'New Traveller', dob: '1995-06-15' });
+  assert.ok(person.id);
+
+  const planning = await createPlanning('v5-dest', { name: 'New Planning', startDate: '2026-02-01', endDate: '2026-02-05', travellerIds: [person.id] });
+  assert.ok(planning.id);
+  assert.equal((await listPlannings('v5-dest')).length, 1);
+});
+
+await test('a full v1 -> v6 upgrade chain preserves an original Phase-0-era destination and its attraction, and People/Plannings work on top of it', async () => {
+  const v1StoreNames = ['destinations', 'sources', 'attractions', 'restaurants', 'accommodations', 'transport', 'costs', 'practicalInfo', 'weatherNotes', 'packingNotes', 'generalNotes', 'intakeDocuments', 'candidates'];
+  const v1Db = await new Promise((resolve, reject) => {
+    const req = globalThis.indexedDB.open('dossier', 1);
+    req.onupgradeneeded = (event) => {
+      const db = event.target.result;
+      for (const name of v1StoreNames) {
+        const store = db.createObjectStore(name, { keyPath: 'id' });
+        if (name !== 'destinations') store.createIndex('destinationId', 'destinationId');
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  await new Promise((resolve, reject) => {
+    const tx = v1Db.transaction(['destinations', 'attractions'], 'readwrite');
+    tx.objectStore('destinations').put({ id: 'v1-dest-planning', name: 'Original Darjeeling Research', overview: 'The very first destination' });
+    tx.objectStore('attractions').put({ id: 'v1-attraction-planning', destinationId: 'v1-dest-planning', place: { name: 'Batasia Loop' }, provenance: 'manual', deletedAt: null });
+    tx.oncomplete = resolve;
+    tx.onerror = reject;
+  });
+  v1Db.close();
+
+  __resetDbForTest();
+  const destination = await getDestination('v1-dest-planning');
+  assert.ok(destination, 'the original v1 destination survives the full upgrade chain to v6');
+  assert.equal(destination.name, 'Original Darjeeling Research');
+
+  const attractions = await listAttractions('v1-dest-planning');
+  assert.equal(attractions.length, 1);
+  assert.equal(attractions[0].place.name, 'Batasia Loop');
+
+  // People and Plannings, introduced at v6, must work against a
+  // database that has been upgraded all the way from v1.
+  const person = await createPerson({ name: 'Chain Traveller', dob: '1999-09-09' });
+  const planning = await createPlanning('v1-dest-planning', { name: 'Chain Trip', startDate: '2026-03-01', endDate: '2026-03-03', travellerIds: [person.id] });
+  assert.equal(planningDayCount(planning), 3);
+});
+
+console.log('\n26. Timeline items (Tour Planning, Chunk 2 — basic itinerary, no Options/Alternatives yet)');
+await test('create, list, get, update, and soft-delete a timeline item', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-15' });
+
+  const item = await createTimelineItem(planning.id, 1, { itemType: 'custom', title: 'Start travel to Ella', startTime: '06:30', plannedDuration: 120, buffer: 15, notes: 'Bring snacks', status: 'planned' });
+  assert.ok(item.id);
+  assert.equal(item.planningId, planning.id);
+  assert.equal(item.dayNumber, 1);
+  assert.equal(item.title, 'Start travel to Ella');
+  assert.equal(item.startTime, '06:30');
+  assert.equal(item.plannedDuration, 120);
+  assert.equal(item.buffer, 15);
+  assert.equal(item.status, 'planned');
+  assert.equal(item.rank, null, 'rank is stored but inert in Chunk 2');
+  assert.equal(item.selected, false, 'selected is stored but inert in Chunk 2');
+  assert.equal(item.deletedAt, null);
+
+  const fetched = await getTimelineItem(item.id);
+  assert.equal(fetched.title, 'Start travel to Ella');
+
+  const all = await listTimelineItems(planning.id);
+  assert.equal(all.length, 1);
+
+  const updated = await updateTimelineItem(item.id, { title: 'Travel to Ella (updated)', status: 'optional' });
+  assert.equal(updated.title, 'Travel to Ella (updated)');
+  assert.equal(updated.status, 'optional');
+  assert.equal(updated.startTime, '06:30', 'unrelated fields survive an update untouched');
+
+  await deleteTimelineItem(item.id);
+  assert.equal(await getTimelineItem(item.id), null, 'a soft-deleted timeline item is no longer returned by getTimelineItem');
+  assert.equal((await listTimelineItems(planning.id)).length, 0, 'a soft-deleted timeline item is excluded from listTimelineItems');
+});
+
+await test('a timeline item can reference an existing Research record, without duplicating its data', async () => {
+  const dest = await createDestination({ name: 'Japan' });
+  const attraction = await createAttraction(dest.id, { place: { name: 'Fushimi Inari Shrine' } });
+  const planning = await createPlanning(dest.id, { name: 'Kyoto Trip', startDate: '2026-04-01', endDate: '2026-04-03' });
+
+  const item = await createTimelineItem(planning.id, 1, { itemType: 'attraction', researchRefType: 'attractions', researchRefId: attraction.id, startTime: '09:00' });
+  assert.equal(item.researchRefType, 'attractions');
+  assert.equal(item.researchRefId, attraction.id);
+  assert.equal(item.title, '', 'a Research-referenced item has no title of its own — the referenced record supplies the name at display time');
+  assert.equal(JSON.stringify(item).includes('Fushimi Inari'), false, 'the referenced record\'s name is never copied onto the timeline item');
+
+  // The same Research record can be referenced by more than one
+  // timeline item (e.g. two candidate days), per the approved design.
+  const item2 = await createTimelineItem(planning.id, 2, { itemType: 'attraction', researchRefType: 'attractions', researchRefId: attraction.id, startTime: '15:00' });
+  assert.equal(item2.researchRefId, attraction.id);
+  assert.equal((await listTimelineItems(planning.id)).length, 2);
+});
+
+await test('a timeline item requires either a title or a Research reference', async () => {
+  const dest = await createDestination({ name: 'Peru' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-01', endDate: '2026-01-03' });
+  await assert.rejects(() => createTimelineItem(planning.id, 1, { itemType: 'custom' }), /title|Research record/i);
+  await assert.rejects(() => createTimelineItem(planning.id, 1, { itemType: 'custom', title: '   ' }), /title|Research record/i);
+  const withTitle = await createTimelineItem(planning.id, 1, { itemType: 'custom', title: 'Free time at the hotel' });
+  assert.ok(withTitle.id);
+});
+
+await test('only the itinerary-relevant Research sections can be referenced from a timeline item', async () => {
+  const dest = await createDestination({ name: 'Vietnam' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-01', endDate: '2026-01-03' });
+  assert.deepEqual(TIMELINE_RESEARCH_REF_TYPES, ['attractions', 'restaurants', 'accommodations', 'transport']);
+  await assert.rejects(
+    () => createTimelineItem(planning.id, 1, { itemType: 'custom', researchRefType: 'weatherNotes', researchRefId: 'some-id' }),
+    /Research type cannot be referenced/i,
+  );
+});
+
+await test('an invalid item type is rejected; every declared TIMELINE_ITEM_TYPES value is accepted', async () => {
+  const dest = await createDestination({ name: 'Iceland' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-01', endDate: '2026-01-10' });
+  await assert.rejects(() => createTimelineItem(planning.id, 1, { itemType: 'not_a_real_type', title: 'x' }), /valid item type/i);
+  for (const itemType of TIMELINE_ITEM_TYPES) {
+    const item = await createTimelineItem(planning.id, 1, { itemType, title: `A ${itemType} item` });
+    assert.equal(item.itemType, itemType);
+  }
+});
+
+await test('a day number is required and must be a real day (>= 1)', async () => {
+  const dest = await createDestination({ name: 'Norway' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-01', endDate: '2026-01-05' });
+  await assert.rejects(() => createTimelineItem(planning.id, 0, { itemType: 'custom', title: 'x' }), /valid day/i);
+  await assert.rejects(() => createTimelineItem(planning.id, null, { itemType: 'custom', title: 'x' }), /valid day/i);
+});
+
+await test('listTimelineItemsForDay returns only that day\'s items, in time order, with untimed items last', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-15' });
+
+  await createTimelineItem(planning.id, 1, { itemType: 'meal', title: 'Breakfast', startTime: '08:30' });
+  await createTimelineItem(planning.id, 1, { itemType: 'custom', title: 'Free time', startTime: '' }); // untimed
+  await createTimelineItem(planning.id, 1, { itemType: 'travel', title: 'Start travel to Ella', startTime: '06:30' });
+  await createTimelineItem(planning.id, 1, { itemType: 'accommodation', title: 'Hotel check-in', startTime: '11:00' });
+  await createTimelineItem(planning.id, 2, { itemType: 'custom', title: 'Day 2 item, should not appear', startTime: '07:00' });
+
+  const day1 = await listTimelineItemsForDay(planning.id, 1);
+  assert.equal(day1.length, 4, 'only Day 1\'s items are returned');
+  assert.deepEqual(day1.map(i => i.title), ['Start travel to Ella', 'Breakfast', 'Hotel check-in', 'Free time'], 'timed items sorted by startTime, untimed item(s) last');
+
+  const day2 = await listTimelineItemsForDay(planning.id, 2);
+  assert.equal(day2.length, 1);
+  assert.equal(day2[0].title, 'Day 2 item, should not appear');
+});
+
+await test('a timeline item stays attached to its dayNumber when the Planning\'s startDate shifts — the core Chunk 2 continuity requirement', async () => {
+  const dest = await createDestination({ name: 'Morocco' });
+  const planning = await createPlanning(dest.id, { name: 'Shiftable Trip', startDate: '2026-01-10', endDate: '2026-01-15' });
+  const item = await createTimelineItem(planning.id, 1, { itemType: 'custom', title: 'Visit the mosque', startTime: '10:00' });
+
+  const shifted = await updatePlanning(planning.id, { startDate: '2026-01-24', endDate: '2026-01-29' });
+  const stillThere = await getTimelineItem(item.id);
+  assert.equal(stillThere.dayNumber, 1, 'the item is still attached to Day 1 — never moved or re-keyed by the date shift');
+  assert.equal(stillThere.title, 'Visit the mosque');
+
+  // Day 1's *calendar date* has moved, per Chunk 1's derived-days
+  // behavior, but that's computed separately — the item record itself
+  // never stores or needs to know a calendar date.
+  const days = listPlanningDays(shifted);
+  assert.equal(days[0].date, '2026-01-24');
+  assert.equal(Object.prototype.hasOwnProperty.call(stillThere, 'date'), false, 'a timeline item never stores its own calendar date');
+});
+
+await test('shortening a Planning does not delete timeline items on now-out-of-range days', async () => {
+  const dest = await createDestination({ name: 'Iceland' });
+  const planning = await createPlanning(dest.id, { name: 'Long trip', startDate: '2026-01-10', endDate: '2026-01-15' });
+  const day5Item = await createTimelineItem(planning.id, 5, { itemType: 'custom', title: 'Glacier hike' });
+
+  const shortened = await updatePlanning(planning.id, { endDate: '2026-01-13' }); // now only 4 days
+  assert.equal(planningDayCount(shortened), 4);
+
+  const stillThere = await getTimelineItem(day5Item.id);
+  assert.ok(stillThere, 'Day 5\'s item is NOT deleted just because the Planning was shortened to 4 days — the UI marks it out-of-range, this store never deletes it');
+  assert.equal(stillThere.title, 'Glacier hike');
+});
+
+console.log('\n27. Database version upgrade to v7 (timelineItems) preserves data through the full chain');
+await test('upgrading a v6 database (people/plannings exist, timelineItems does not) to v7 adds timelineItems without touching existing data', async () => {
+  const v6StoreNames = [
+    'destinations', 'locations', 'journeys', 'sources', 'attractions', 'restaurants', 'dishes', 'accommodations', 'transport',
+    'costs', 'practicalInfo', 'weatherNotes', 'packingNotes', 'generalNotes',
+    'shoppingItems', 'shops', 'exchangeRates', 'people', 'plannings', 'intakeDocuments', 'candidates',
+  ];
+  const v6Db = await new Promise((resolve, reject) => {
+    const req = globalThis.indexedDB.open('dossier', 6);
+    req.onupgradeneeded = (event) => {
+      const db = event.target.result;
+      for (const name of v6StoreNames) {
+        const store = db.createObjectStore(name, { keyPath: 'id' });
+        if (name === 'plannings') store.createIndex('destinationId', 'destinationId');
+        else if (!['destinations', 'exchangeRates', 'people'].includes(name)) store.createIndex('destinationId', 'destinationId');
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  await new Promise((resolve, reject) => {
+    const tx = v6Db.transaction(['destinations', 'people', 'plannings'], 'readwrite');
+    tx.objectStore('destinations').put({ id: 'v6-dest', name: 'Pre-Timeline Destination', currencies: [], deletedAt: null });
+    tx.objectStore('people').put({ id: 'v6-person', name: 'Pre-existing Traveller', dob: '1990-01-01', deletedAt: null });
+    tx.objectStore('plannings').put({ id: 'v6-planning', destinationId: 'v6-dest', name: 'Pre-Timeline Planning', startDate: '2026-01-01', endDate: '2026-01-05', notes: '', travellerIds: ['v6-person'], deletedAt: null });
+    tx.oncomplete = resolve;
+    tx.onerror = reject;
+  });
+  v6Db.close();
+
+  __resetDbForTest();
+  const destination = await getDestination('v6-dest');
+  assert.ok(destination, 'pre-existing v6 destination survives the v6->v7 upgrade');
+  const planning = await getPlanning('v6-planning');
+  assert.ok(planning, 'pre-existing v6 Planning survives the v6->v7 upgrade');
+  assert.deepEqual(planning.travellerIds, ['v6-person']);
+
+  // The new timelineItems store must now be fully usable.
+  assert.equal((await listTimelineItems('v6-planning')).length, 0, 'the new timelineItems store exists and starts empty');
+  const item = await createTimelineItem('v6-planning', 1, { itemType: 'custom', title: 'New item on an upgraded database' });
+  assert.ok(item.id);
+  assert.equal((await listTimelineItems('v6-planning')).length, 1);
+});
+
+await test('a full v1 -> v7 upgrade chain preserves an original Phase-0-era destination, and People/Plannings/TimelineItems all work on top of it', async () => {
+  const v1StoreNames = ['destinations', 'sources', 'attractions', 'restaurants', 'accommodations', 'transport', 'costs', 'practicalInfo', 'weatherNotes', 'packingNotes', 'generalNotes', 'intakeDocuments', 'candidates'];
+  const v1Db = await new Promise((resolve, reject) => {
+    const req = globalThis.indexedDB.open('dossier', 1);
+    req.onupgradeneeded = (event) => {
+      const db = event.target.result;
+      for (const name of v1StoreNames) {
+        const store = db.createObjectStore(name, { keyPath: 'id' });
+        if (name !== 'destinations') store.createIndex('destinationId', 'destinationId');
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  await new Promise((resolve, reject) => {
+    const tx = v1Db.transaction(['destinations', 'attractions'], 'readwrite');
+    tx.objectStore('destinations').put({ id: 'v1-dest-timeline', name: 'Original Darjeeling Research', overview: 'The very first destination' });
+    tx.objectStore('attractions').put({ id: 'v1-attraction-timeline', destinationId: 'v1-dest-timeline', place: { name: 'Batasia Loop' }, provenance: 'manual', deletedAt: null });
+    tx.oncomplete = resolve;
+    tx.onerror = reject;
+  });
+  v1Db.close();
+
+  __resetDbForTest();
+  const destination = await getDestination('v1-dest-timeline');
+  assert.ok(destination, 'the original v1 destination survives the full upgrade chain to v7');
+
+  const attractions = await listAttractions('v1-dest-timeline');
+  assert.equal(attractions.length, 1);
+  assert.equal(attractions[0].place.name, 'Batasia Loop');
+
+  const person = await createPerson({ name: 'Chain Traveller', dob: '1999-09-09' });
+  const planning = await createPlanning('v1-dest-timeline', { name: 'Chain Trip', startDate: '2026-03-01', endDate: '2026-03-03', travellerIds: [person.id] });
+  const item = await createTimelineItem(planning.id, 1, { itemType: 'attraction', researchRefType: 'attractions', researchRefId: attractions[0].id, startTime: '10:00' });
+  assert.equal(item.researchRefId, attractions[0].id);
+  assert.equal((await listTimelineItemsForDay(planning.id, 1)).length, 1);
+});
+
+console.log('\n28. Itinerary Option groups (Tour Planning, Chunk 3 — alternative sequences for a day-part)');
+await test('create, list, get, select, and soft-delete an Option group', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-15' });
+
+  const group = await createOptionGroup(planning.id, { dayNumber: 3, partLabel: 'Morning' });
+  assert.ok(group.id);
+  assert.equal(group.planningId, planning.id);
+  assert.equal(group.dayNumber, 3);
+  assert.equal(group.partLabel, 'Morning');
+  assert.equal(group.selectedOptionLabel, null, 'Selection pending by default — nothing forces an immediate choice');
+
+  const fetched = await getOptionGroup(group.id);
+  assert.equal(fetched.partLabel, 'Morning');
+
+  const list = await listOptionGroupsForPlanning(planning.id);
+  assert.equal(list.length, 1);
+
+  const selected = await selectOption(group.id, 'A');
+  assert.equal(selected.selectedOptionLabel, 'A');
+
+  const clearedAgain = await selectOption(group.id, null);
+  assert.equal(clearedAgain.selectedOptionLabel, null, 'clearing the selection returns to Selection pending — a valid, supported state');
+
+  await deleteOptionGroup(group.id);
+  assert.equal(await getOptionGroup(group.id), null);
+  assert.equal((await listOptionGroupsForPlanning(planning.id)).length, 0);
+});
+
+await test('a part label is required; day-parts are free-form, not a fixed enum', async () => {
+  const dest = await createDestination({ name: 'Peru' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-01', endDate: '2026-01-05' });
+  await assert.rejects(() => createOptionGroup(planning.id, { dayNumber: 1, partLabel: '' }), /part label/i);
+  await assert.rejects(() => createOptionGroup(planning.id, { dayNumber: 1, partLabel: '   ' }), /part label/i);
+  // Not limited to Morning/Afternoon/Evening — any label is accepted.
+  const custom = await createOptionGroup(planning.id, { dayNumber: 1, partLabel: 'Pre-dawn hike window' });
+  assert.equal(custom.partLabel, 'Pre-dawn hike window');
+});
+
+await test('different parts of the same day are independent groups with independent selections', async () => {
+  const dest = await createDestination({ name: 'Japan' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-01', endDate: '2026-01-05' });
+  const morning = await createOptionGroup(planning.id, { dayNumber: 3, partLabel: 'Morning' });
+  await createOptionGroup(planning.id, { dayNumber: 3, partLabel: 'Afternoon' });
+  const evening = await createOptionGroup(planning.id, { dayNumber: 3, partLabel: 'Evening' });
+
+  await selectOption(morning.id, 'B');
+  await selectOption(evening.id, 'A');
+  // Afternoon is left unresolved on purpose.
+
+  const groups = await listOptionGroupsForPlanning(planning.id);
+  const byLabel = Object.fromEntries(groups.map(g => [g.partLabel, g]));
+  assert.equal(byLabel.Morning.selectedOptionLabel, 'B');
+  assert.equal(byLabel.Afternoon.selectedOptionLabel, null, 'Afternoon stays Selection pending independently of Morning/Evening');
+  assert.equal(byLabel.Evening.selectedOptionLabel, 'A');
+});
+
+console.log('\n29. timelineItems gains partLabel/optionGroupId/optionLabel (Chunk 3, additive)');
+await test('a timeline item can be placed into a specific Option, and requires both optionGroupId and optionLabel together', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-15' });
+  const group = await createOptionGroup(planning.id, { dayNumber: 3, partLabel: 'Morning' });
+
+  const item = await createTimelineItem(planning.id, 3, { itemType: 'custom', title: 'Attraction A', partLabel: 'Morning', optionGroupId: group.id, optionLabel: 'A' });
+  assert.equal(item.partLabel, 'Morning');
+  assert.equal(item.optionGroupId, group.id);
+  assert.equal(item.optionLabel, 'A');
+
+  await assert.rejects(
+    () => createTimelineItem(planning.id, 3, { itemType: 'custom', title: 'x', optionGroupId: group.id }),
+    /Option label/i,
+    'optionGroupId without optionLabel is rejected',
+  );
+  await assert.rejects(
+    () => createTimelineItem(planning.id, 3, { itemType: 'custom', title: 'x', optionLabel: 'A' }),
+    /Option group/i,
+    'optionLabel without optionGroupId is rejected',
+  );
+});
+
+await test('an ordinary timeline item (no Option) has partLabel/optionGroupId/optionLabel all null by default', async () => {
+  const dest = await createDestination({ name: 'Iceland' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-01', endDate: '2026-01-05' });
+  const item = await createTimelineItem(planning.id, 1, { itemType: 'custom', title: 'Breakfast' });
+  assert.equal(item.partLabel, null);
+  assert.equal(item.optionGroupId, null);
+  assert.equal(item.optionLabel, null);
+});
+
+await test('multiple Options for the same part can each hold their own sequence of items, independently of one another', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const attractionA = await createAttraction(dest.id, { place: { name: 'Attraction A' } });
+  const attractionB = await createAttraction(dest.id, { place: { name: 'Attraction B' } });
+  const attractionC = await createAttraction(dest.id, { place: { name: 'Attraction C' } });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-15' });
+  const group = await createOptionGroup(planning.id, { dayNumber: 3, partLabel: 'Morning' });
+
+  await createTimelineItem(planning.id, 3, { itemType: 'attraction', researchRefType: 'attractions', researchRefId: attractionA.id, partLabel: 'Morning', optionGroupId: group.id, optionLabel: 'A', startTime: '09:00' });
+  await createTimelineItem(planning.id, 3, { itemType: 'attraction', researchRefType: 'attractions', researchRefId: attractionB.id, partLabel: 'Morning', optionGroupId: group.id, optionLabel: 'A', startTime: '10:30' });
+  await createTimelineItem(planning.id, 3, { itemType: 'attraction', researchRefType: 'attractions', researchRefId: attractionC.id, partLabel: 'Morning', optionGroupId: group.id, optionLabel: 'B', startTime: '09:00' });
+
+  const all = await listTimelineItemsForDay(planning.id, 3);
+  const optionA = all.filter(i => i.optionLabel === 'A');
+  const optionB = all.filter(i => i.optionLabel === 'B');
+  assert.equal(optionA.length, 2, 'Option A has its own 2-item sequence');
+  assert.equal(optionB.length, 1, 'Option B has its own independent 1-item sequence');
+});
+
+await test('unselected Options remain visible as planned possibilities — their items are never deleted or hidden by group state', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-15' });
+  const group = await createOptionGroup(planning.id, { dayNumber: 3, partLabel: 'Morning' });
+  const itemA = await createTimelineItem(planning.id, 3, { itemType: 'custom', title: 'Option A item', optionGroupId: group.id, optionLabel: 'A' });
+  const itemB = await createTimelineItem(planning.id, 3, { itemType: 'custom', title: 'Option B item', optionGroupId: group.id, optionLabel: 'B' });
+
+  await selectOption(group.id, 'A');
+  // Selecting Option A must not touch Option B's items at all — they
+  // are a store-level fact independent of which Option is "current".
+  const stillB = await getTimelineItem(itemB.id);
+  assert.ok(stillB, 'Option B\'s item still exists after Option A is selected');
+  assert.equal(stillB.optionLabel, 'B');
+  const stillA = await getTimelineItem(itemA.id);
+  assert.ok(stillA);
+});
+
+console.log('\n30. Item Alternatives (Tour Planning, Chunk 3 — alternative choices for one timeline slot)');
+await test('create, list, get, update, and soft-delete an item alternative, nested under its parent timeline item', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const restaurantA = await createAttraction(dest.id, { place: { name: 'Restaurant A (as attraction stand-in)' } });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-15' });
+  const lunchItem = await createTimelineItem(planning.id, 1, { itemType: 'meal', title: 'Lunch' });
+
+  const alt = await createItemAlternative(lunchItem.id, { researchRefType: 'attractions', researchRefId: restaurantA.id, rank: 1 });
+  assert.ok(alt.id);
+  assert.equal(alt.timelineItemId, lunchItem.id);
+  assert.equal(alt.researchRefId, restaurantA.id);
+  assert.equal(alt.rank, 1);
+  assert.equal(alt.selected, false, 'not selected by default — unresolved is a valid starting state');
+  assert.equal(alt.costSelections, null, 'costSelections is stored, unused until a later chunk');
+
+  const fetched = await getItemAlternative(alt.id);
+  assert.equal(fetched.rank, 1);
+
+  await createItemAlternative(lunchItem.id, { title: 'Restaurant B (custom entry)', rank: 2 });
+  const list = await listAlternativesForItem(lunchItem.id);
+  assert.equal(list.length, 2, 'both alternatives are nested under the same parent item');
+
+  const updated = await updateItemAlternative(alt.id, { selected: true });
+  assert.equal(updated.selected, true);
+  assert.equal(updated.rank, 1, 'unrelated fields survive an update untouched');
+
+  await deleteItemAlternative(alt.id);
+  assert.equal(await getItemAlternative(alt.id), null);
+  assert.equal((await listAlternativesForItem(lunchItem.id)).length, 1);
+});
+
+await test('an item alternative requires either a title or a Research reference, and only itinerary-relevant Research types', async () => {
+  const dest = await createDestination({ name: 'Peru' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-01', endDate: '2026-01-05' });
+  const item = await createTimelineItem(planning.id, 1, { itemType: 'meal', title: 'Lunch' });
+  await assert.rejects(() => createItemAlternative(item.id, {}), /title|Research record/i);
+  await assert.rejects(
+    () => createItemAlternative(item.id, { researchRefType: 'weatherNotes', researchRefId: 'x' }),
+    /Research type cannot be referenced/i,
+  );
+  const ok = await createItemAlternative(item.id, { title: 'A valid custom alternative' });
+  assert.ok(ok.id);
+});
+
+await test('unresolved alternative selection is valid — multiple planned alternatives can coexist with none selected', async () => {
+  const dest = await createDestination({ name: 'Vietnam' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-01', endDate: '2026-01-05' });
+  const item = await createTimelineItem(planning.id, 1, { itemType: 'meal', title: 'Dinner' });
+  const altA = await createItemAlternative(item.id, { title: 'Restaurant A', rank: 1 });
+  const altB = await createItemAlternative(item.id, { title: 'Restaurant B', rank: 2 });
+  assert.equal(altA.selected, false);
+  assert.equal(altB.selected, false);
+  // Both remain "planned alternatives" without a final choice — a
+  // genuinely valid, expected state per the approved design.
+  const list = await listAlternativesForItem(item.id);
+  assert.equal(list.filter(a => a.selected).length, 0);
+  assert.equal(list.length, 2);
+
+  const resolved = await updateItemAlternative(altA.id, { selected: true });
+  assert.equal(resolved.selected, true);
+  // Once A is selected, B can remain as a planned alternative — nothing
+  // auto-clears it, matching "Once Restaurant A is selected, B can
+  // remain as a planned alternative" from the approved design.
+  const bStill = await getItemAlternative(altB.id);
+  assert.equal(bStill.selected, false);
+});
+
+await test('an item alternative under an item that belongs to an UNSELECTED Option does not count as current itinerary inclusion', async () => {
+  // This proves the "inherited inclusion context" design note in
+  // itemAlternatives.js: alternatives never track inclusion themselves
+  // — it always depends on whether the PARENT item's Option is
+  // currently selected, which is read from planningOptionGroups, not
+  // from anything stored on the alternative or the item.
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-15' });
+  const group = await createOptionGroup(planning.id, { dayNumber: 3, partLabel: 'Morning' });
+  const optionBItem = await createTimelineItem(planning.id, 3, { itemType: 'meal', title: 'Lunch (Option B)', optionGroupId: group.id, optionLabel: 'B' });
+  const altUnderB = await createItemAlternative(optionBItem.id, { title: 'Backup restaurant', selected: true });
+
+  // Option A is selected, not B.
+  await selectOption(group.id, 'A');
+
+  const currentGroup = await getOptionGroup(group.id);
+  const isParentItemCurrentlyIncluded = currentGroup.selectedOptionLabel === optionBItem.optionLabel;
+  assert.equal(isParentItemCurrentlyIncluded, false, 'Option B\'s item is not part of the currently-selected sequence');
+  // Even though the alternative itself is marked selected, its
+  // inclusion in the CURRENT itinerary is governed entirely by its
+  // parent's Option context, which is what the UI layer checks — this
+  // store-level fact (altUnderB.selected) is unaffected either way.
+  const stillSelected = await getItemAlternative(altUnderB.id);
+  assert.equal(stillSelected.selected, true, 'the alternative\'s own selected flag is untouched by which Option is current');
+});
+
+console.log('\n31. Database version upgrade to v8 (partLabel/optionGroupId/optionLabel + planningOptionGroups + itemAlternatives) preserves data through the full chain');
+await test('upgrading a v7 database (timelineItems exists without part/option fields) to v8 adds the new fields and stores without touching or reinterpreting existing timeline items', async () => {
+  const v7StoreNames = [
+    'destinations', 'locations', 'journeys', 'sources', 'attractions', 'restaurants', 'dishes', 'accommodations', 'transport',
+    'costs', 'practicalInfo', 'weatherNotes', 'packingNotes', 'generalNotes',
+    'shoppingItems', 'shops', 'exchangeRates', 'people', 'plannings', 'timelineItems', 'intakeDocuments', 'candidates',
+  ];
+  const v7Db = await new Promise((resolve, reject) => {
+    const req = globalThis.indexedDB.open('dossier', 7);
+    req.onupgradeneeded = (event) => {
+      const db = event.target.result;
+      for (const name of v7StoreNames) {
+        const store = db.createObjectStore(name, { keyPath: 'id' });
+        if (name === 'timelineItems') store.createIndex('planningId', 'planningId');
+        else if (name === 'plannings') store.createIndex('destinationId', 'destinationId');
+        else if (!['destinations', 'exchangeRates', 'people'].includes(name)) store.createIndex('destinationId', 'destinationId');
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  await new Promise((resolve, reject) => {
+    const tx = v7Db.transaction(['destinations', 'plannings', 'timelineItems'], 'readwrite');
+    tx.objectStore('destinations').put({ id: 'v7-dest', name: 'Pre-Options Destination', currencies: [], deletedAt: null });
+    tx.objectStore('plannings').put({ id: 'v7-planning', destinationId: 'v7-dest', name: 'Pre-Options Planning', startDate: '2026-01-01', endDate: '2026-01-05', notes: '', travellerIds: [], deletedAt: null });
+    // A pre-Chunk-3 timeline item — no partLabel/optionGroupId/optionLabel fields exist on it at all.
+    tx.objectStore('timelineItems').put({
+      id: 'v7-item', planningId: 'v7-planning', dayNumber: 1, itemType: 'custom', title: 'Pre-existing breakfast item',
+      researchRefType: null, researchRefId: null, startTime: '08:00', plannedDuration: null, buffer: null, notes: '',
+      status: 'planned', rank: null, selected: false, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', deletedAt: null,
+    });
+    tx.oncomplete = resolve;
+    tx.onerror = reject;
+  });
+  v7Db.close();
+
+  __resetDbForTest();
+  const destination = await getDestination('v7-dest');
+  assert.ok(destination, 'pre-existing v7 destination survives the v7->v8 upgrade');
+  const planning = await getPlanning('v7-planning');
+  assert.ok(planning, 'pre-existing v7 Planning survives the v7->v8 upgrade');
+
+  // The pre-existing timeline item must still exist, completely
+  // unmodified, unmoved, and unreinterpreted — not deleted, not
+  // auto-assigned to any Option.
+  const preExistingItem = await getTimelineItem('v7-item');
+  assert.ok(preExistingItem, 'the pre-existing v7 timeline item was not deleted by the migration');
+  assert.equal(preExistingItem.title, 'Pre-existing breakfast item');
+  assert.equal(preExistingItem.dayNumber, 1);
+  assert.equal(preExistingItem.startTime, '08:00');
+  // The new fields read as absent/null — meaning "ordinary, current,
+  // no competing option" — exactly as an item created fresh after
+  // Chunk 3 would mean if never placed in an Option.
+  assert.equal(preExistingItem.partLabel ?? null, null, 'a pre-Chunk-3 item has no partLabel — treated as an ordinary item');
+  assert.equal(preExistingItem.optionGroupId ?? null, null, 'a pre-Chunk-3 item has no optionGroupId — not part of any Option');
+  assert.equal(preExistingItem.optionLabel ?? null, null);
+
+  // It must remain listable exactly as before.
+  const dayItems = await listTimelineItemsForDay('v7-planning', 1);
+  assert.equal(dayItems.length, 1);
+  assert.equal(dayItems[0].id, 'v7-item');
+
+  // It must remain fully editable with the new fields via the normal API.
+  const updated = await updateTimelineItem('v7-item', { partLabel: 'Morning' });
+  assert.equal(updated.partLabel, 'Morning', 'the new field can be set on a migrated item via the ordinary update path');
+
+  // The new stores must now be fully usable.
+  assert.equal((await listOptionGroupsForPlanning('v7-planning')).length, 0, 'the new planningOptionGroups store exists and starts empty');
+  const group = await createOptionGroup('v7-planning', { dayNumber: 2, partLabel: 'Afternoon' });
+  assert.ok(group.id);
+  const alt = await createItemAlternative('v7-item', { title: 'A new alternative on an upgraded database' });
+  assert.ok(alt.id);
+  assert.equal((await listAlternativesForItem('v7-item')).length, 1);
+});
+
+await test('a full v1 -> v8 upgrade chain preserves an original Phase-0-era destination, and every Tour Planning feature works on top of it', async () => {
+  const v1StoreNames = ['destinations', 'sources', 'attractions', 'restaurants', 'accommodations', 'transport', 'costs', 'practicalInfo', 'weatherNotes', 'packingNotes', 'generalNotes', 'intakeDocuments', 'candidates'];
+  const v1Db = await new Promise((resolve, reject) => {
+    const req = globalThis.indexedDB.open('dossier', 1);
+    req.onupgradeneeded = (event) => {
+      const db = event.target.result;
+      for (const name of v1StoreNames) {
+        const store = db.createObjectStore(name, { keyPath: 'id' });
+        if (name !== 'destinations') store.createIndex('destinationId', 'destinationId');
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  await new Promise((resolve, reject) => {
+    const tx = v1Db.transaction(['destinations', 'attractions'], 'readwrite');
+    tx.objectStore('destinations').put({ id: 'v1-dest-options', name: 'Original Darjeeling Research', overview: 'The very first destination' });
+    tx.objectStore('attractions').put({ id: 'v1-attraction-options', destinationId: 'v1-dest-options', place: { name: 'Batasia Loop' }, provenance: 'manual', deletedAt: null });
+    tx.oncomplete = resolve;
+    tx.onerror = reject;
+  });
+  v1Db.close();
+
+  __resetDbForTest();
+  const destination = await getDestination('v1-dest-options');
+  assert.ok(destination, 'the original v1 destination survives the full upgrade chain to v8');
+
+  const attractions = await listAttractions('v1-dest-options');
+  assert.equal(attractions.length, 1);
+
+  const person = await createPerson({ name: 'Chain Traveller', dob: '1999-09-09' });
+  const planning = await createPlanning('v1-dest-options', { name: 'Chain Trip', startDate: '2026-03-01', endDate: '2026-03-10', travellerIds: [person.id] });
+  const group = await createOptionGroup(planning.id, { dayNumber: 3, partLabel: 'Morning' });
+  const item = await createTimelineItem(planning.id, 3, { itemType: 'attraction', researchRefType: 'attractions', researchRefId: attractions[0].id, optionGroupId: group.id, optionLabel: 'A', startTime: '09:00' });
+  await selectOption(group.id, 'A');
+  const alt = await createItemAlternative(item.id, { title: 'A fallback plan' });
+
+  assert.equal((await listTimelineItemsForDay(planning.id, 3)).length, 1);
+  assert.equal((await listAlternativesForItem(item.id)).length, 1);
+  assert.ok(alt.id);
 });
 
 console.log(`\n=== ${passed} passed, ${failed} failed ===\n`);

@@ -22,6 +22,16 @@
   gap: var(--space-3);
 }
 
+/* Used by top-level (non-destination-scoped) pages that reuse this
+   file's .section-page/.entry-card classes for a simple list+header
+   layout without SectionPageLayout's breadcrumb — see PeoplePage.jsx
+   and PlanningsPage.jsx (Tour Planning, Chunk 1). Same subtitle
+   treatment as .research-home__subtitle in ResearchHome.css. */
+.section-page__subtitle {
+  color: var(--color-text-secondary);
+  margin: var(--space-1) 0 0;
+}
+
 .entry-card {
   display: flex;
   align-items: flex-start;

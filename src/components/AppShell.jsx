@@ -8,6 +8,10 @@ import './AppShell.css';
 
 const NAV_ITEMS = [
   { to: '/', label: 'Home', icon: '🏠' },
+  // Tour Planning, Chunk 1 — top-level nav entries alongside Home,
+  // since People and Plannings aren't scoped to a single destination.
+  { to: '/plannings', label: 'Plannings', icon: '🗺️' },
+  { to: '/people', label: 'Travellers', icon: '🧑' },
 ];
 
 // `children`, when provided, replaces the routed <Outlet /> content —
