@@ -37,6 +37,13 @@ export function emptyRestaurantEntry() {
     // exists on every restaurant record but is not shown/set by this
     // section's form going forward.
     priceTier: null,
+    // Structured typical meal duration, additive (Tour Planning,
+    // Chunk 4) — minutes. No free-text equivalent existed on this
+    // store before, so there is nothing to preserve or migrate; a
+    // record with these left null simply cannot be duration-validated
+    // by Planning yet (never a warning — see planningValidation.js).
+    typicalDurationMin: null,
+    typicalDurationMax: null,
   };
 }
 

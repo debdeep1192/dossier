@@ -223,12 +223,16 @@ function RestaurantForm({ destinationId, destinationName, record, currencies, de
   const [price, setPrice] = useState(base.price || null);
   const [dietaryNotes, setDietaryNotes] = useState(base.dietaryNotes || '');
   const [priceTier, setPriceTier] = useState(base.priceTier || '');
+  const [typicalDurationMin, setTypicalDurationMin] = useState(base.typicalDurationMin ?? '');
+  const [typicalDurationMax, setTypicalDurationMax] = useState(base.typicalDurationMax ?? '');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   const advancedHasContent = hasAdvancedContent(
     !isMoneyEmpty(base.price),
     base.priceTier,
+    base.typicalDurationMin,
+    base.typicalDurationMax,
   );
 
   async function handleSubmit(e) {
@@ -249,6 +253,8 @@ function RestaurantForm({ destinationId, destinationName, record, currencies, de
         // by patch() when this field is simply absent from `fields`.
         dietaryNotes,
         priceTier: priceTier || null,
+        typicalDurationMin: typicalDurationMin === '' ? null : Number(typicalDurationMin),
+        typicalDurationMax: typicalDurationMax === '' ? null : Number(typicalDurationMax),
       };
       if (record) await updateRestaurantEntry(record.id, fields);
       else await createRestaurantEntry(destinationId, fields);
@@ -286,6 +292,10 @@ function RestaurantForm({ destinationId, destinationName, record, currencies, de
             <option value="regular">Regular</option>
             <option value="fine_dining">Fine dining</option>
           </Select>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-2)' }}>
+            <Input label="Typical duration, min (minutes)" type="number" min="0" value={typicalDurationMin} onChange={e => setTypicalDurationMin(e.target.value)} hint="Used by Tour Planning to flag an unusually short/long meal." />
+            <Input label="Typical duration, max (minutes)" type="number" min="0" value={typicalDurationMax} onChange={e => setTypicalDurationMax(e.target.value)} />
+          </div>
         </Disclosure>
 
         {record && dishes.length > 0 && (

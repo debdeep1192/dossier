@@ -10,6 +10,7 @@ import { listAttractions } from '../db/stores/attractions';
 import { listRestaurantEntries, isPlaceBased } from '../db/stores/restaurants';
 import { listAccommodations } from '../db/stores/accommodations';
 import { listTransportEntries } from '../db/stores/transport';
+import { weekdayKeyForDate, validateTimelineItem } from '../lib/planningValidation';
 import { useCachedQuery, invalidateCachedQuery } from '../hooks/useCachedQuery';
 import Card from '../components/Card';
 import Button from '../components/Button';
@@ -289,6 +290,25 @@ function DaysTimeline({ planning, destinationId, timelineItems, optionGroups, re
   const groupsByDay = {};
   for (const group of optionGroups) (groupsByDay[group.dayNumber] ||= []).push(group);
 
+  // Day-level indicator (Chunk 4): true if ANY item scheduled on this
+  // day — ordinary or inside any Option, selected or not, since an
+  // unselected Option's items are still "planned possibilities" worth
+  // knowing about — has a critical or warning-level finding. Purely
+  // derived for display; nothing here is persisted.
+  function dayHasWarning(dayNumber, weekdayKey) {
+    const dayItems = [
+      ...(ordinaryItemsByDay[dayNumber] || []),
+      ...(groupsByDay[dayNumber] || []).flatMap(g => groupedItemsByGroupId[g.id] || []),
+    ];
+    return dayItems.some(item => {
+      if (!item.researchRefId) return false;
+      const record = researchByTypeAndId[item.researchRefType]?.[item.researchRefId];
+      if (!record) return false;
+      const findings = validateTimelineItem({ item, record, weekdayKey });
+      return Boolean(findings.openingHours);
+    });
+  }
+
   async function handleDeleteItem(item) {
     if (!window.confirm('Remove this item?')) return;
     await deleteTimelineItem(item.id);
@@ -333,6 +353,9 @@ function DaysTimeline({ planning, destinationId, timelineItems, optionGroups, re
                 <div>
                   <span className="planning-days__number">Day {day.dayNumber}</span>
                   <span className="planning-days__date">{day.date}</span>
+                  {dayHasWarning(day.dayNumber, weekdayKeyForDate(day.date)) && (
+                    <span className="planning-day__warning-badge" title="At least one item on this day has an opening-hours issue">⚠️</span>
+                  )}
                 </div>
                 <div className="planning-day__header-actions">
                   <Button variant="secondary" size="sm" onClick={() => setAddingGroupToDay(day.dayNumber)}>+ Add Option group</Button>
@@ -350,6 +373,7 @@ function DaysTimeline({ planning, destinationId, timelineItems, optionGroups, re
                       group={group}
                       items={groupedItemsByGroupId[group.id] || []}
                       researchByTypeAndId={researchByTypeAndId}
+                      weekdayKey={weekdayKeyForDate(day.date)}
                       onSelectOption={(label) => handleSelectOption(group, label)}
                       onDeleteGroup={() => handleDeleteGroup(group)}
                       onEditItem={setEditingItem}
@@ -370,6 +394,7 @@ function DaysTimeline({ planning, destinationId, timelineItems, optionGroups, re
                           key={item.id}
                           item={item}
                           researchByTypeAndId={researchByTypeAndId}
+                          weekdayKey={weekdayKeyForDate(day.date)}
                           onEdit={() => setEditingItem(item)}
                           onDelete={() => handleDeleteItem(item)}
                         />
@@ -435,7 +460,7 @@ function DaysTimeline({ planning, destinationId, timelineItems, optionGroups, re
 // action so the person isn't limited to only the Options that already
 // exist — the group itself is created empty (see OptionGroupForm) and
 // Options are populated by adding items to them one at a time.
-function OptionGroupPanel({ group, items, researchByTypeAndId, onSelectOption, onDeleteGroup, onEditItem, onDeleteItem, onAddItemToOption, onAddNewOption }) {
+function OptionGroupPanel({ group, items, researchByTypeAndId, weekdayKey, onSelectOption, onDeleteGroup, onEditItem, onDeleteItem, onAddItemToOption, onAddNewOption }) {
   const itemsByOption = {};
   for (const item of items) (itemsByOption[item.optionLabel] ||= []).push(item);
   const optionLabels = Object.keys(itemsByOption).sort();
@@ -470,6 +495,7 @@ function OptionGroupPanel({ group, items, researchByTypeAndId, onSelectOption, o
                   key={item.id}
                   item={item}
                   researchByTypeAndId={researchByTypeAndId}
+                  weekdayKey={weekdayKey}
                   onEdit={() => onEditItem(item)}
                   onDelete={() => onDeleteItem(item)}
                 />
@@ -486,9 +512,22 @@ function OptionGroupPanel({ group, items, researchByTypeAndId, onSelectOption, o
 // One row in a timeline list — used both for ordinary (ungrouped)
 // items and for items inside an Option, so the two always look and
 // behave the same way.
-function TimelineItemRow({ item, researchByTypeAndId, onEdit, onDelete }) {
+//
+// Chunk 4: runs the pure validation checks (opening hours / typical
+// duration / best-time) against the item's resolved Research record,
+// purely for display — nothing here is persisted, and nothing here
+// moves, blocks, or alters the item itself. This runs identically
+// whether the item's Option is currently selected or not (an
+// unselected Option's items are still worth flagging, since they're
+// still a "planned possibility" per Chunk 3's own inclusion rules) —
+// this component has no awareness of Option selection state at all,
+// deliberately, since opening-hours/duration/best-time facts about a
+// place don't depend on whether this particular sequence was chosen.
+function TimelineItemRow({ item, researchByTypeAndId, weekdayKey, onEdit, onDelete }) {
   const referencedRecord = item.researchRefType ? researchByTypeAndId[item.researchRefType]?.[item.researchRefId] : null;
   const title = item.researchRefId ? describeReferencedRecord(item.researchRefType, referencedRecord) : item.title;
+  const findings = item.researchRefId ? validateTimelineItem({ item, record: referencedRecord, weekdayKey }) : { openingHours: null, duration: null, bestTime: null };
+
   return (
     <li className="planning-item" onClick={onEdit}>
       <div className="planning-item__main">
@@ -503,6 +542,17 @@ function TimelineItemRow({ item, researchByTypeAndId, onEdit, onDelete }) {
           {item.buffer ? ` · +${item.buffer} min buffer` : ''}
         </p>
         {item.notes && <p className="planning-item__notes">{item.notes}</p>}
+        {findings.openingHours && (
+          <p className={`planning-item__finding planning-item__finding--${findings.openingHours.level}`}>
+            {findings.openingHours.level === 'critical' ? '⚠️ ' : ''}{findings.openingHours.message}
+          </p>
+        )}
+        {findings.duration && (
+          <p className="planning-item__finding planning-item__finding--info">{findings.duration.message}</p>
+        )}
+        {findings.bestTime && (
+          <p className="planning-item__finding planning-item__finding--hint">💡 {findings.bestTime.message}</p>
+        )}
       </div>
       <button type="button" className="entry-card__delete" onClick={(e) => { e.stopPropagation(); onDelete(); }}>Delete</button>
     </li>

@@ -60,7 +60,9 @@ export function emptyTransportEntry() {
     mode: '', // one of TRANSPORT_MODES, or 'Other'
     modeOther: '', // free-text explanation when mode === 'Other' — see components/OtherSelect.jsx
     price: emptyMoney(),
-    duration: '',
+    duration: '', // free text — kept as-is; see typicalDurationMin/Max below for the structured equivalent used by Planning validation (Chunk 4)
+    typicalDurationMin: null, // minutes — structured, additive (Tour Planning, Chunk 4)
+    typicalDurationMax: null, // minutes — structured, additive
     schedule: '', // frequency/timing notes
     bookingNotes: '',
     journeyId: null, // optional — links this specific transport option to a saved Journey (db/stores/journeys.js) between two locations, when the person has already defined one; independent of travelType, and independent of from/to/fromLocationId/toLocationId (a journey link is extra context, never a replacement for the endpoints).
@@ -107,5 +109,11 @@ export function normalizeTransportEntry(record) {
     travelType: record.travelType || 'inter_city',
     fromLocationId: record.fromLocationId ?? null,
     toLocationId: record.toLocationId ?? null,
+    // Structured duration (Tour Planning, Chunk 4), additive — a
+    // record saved before this existed has no such keys; read as null,
+    // meaning "not researched yet," same as the free-text `duration`
+    // field being blank. The free-text field itself is never touched.
+    typicalDurationMin: record.typicalDurationMin ?? null,
+    typicalDurationMax: record.typicalDurationMax ?? null,
   };
 }

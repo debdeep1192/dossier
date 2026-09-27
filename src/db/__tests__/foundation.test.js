@@ -9,7 +9,7 @@ import 'fake-indexeddb/auto';
 import assert from 'node:assert/strict';
 import { __resetDbForTest } from '../connection.js';
 import { createDestination, deleteDestination, getDestination } from '../stores/destinations.js';
-import { createAttraction, listAttractions, updateAttraction, deleteAttraction, getAttraction } from '../stores/attractions.js';
+import { createAttraction, listAttractions, updateAttraction, deleteAttraction, getAttraction, normalizeAttraction } from '../stores/attractions.js';
 import { createRestaurantEntry, isPlaceBased, updateRestaurantEntry } from '../stores/restaurants.js';
 import { createTransportEntry, listTransportEntries } from '../stores/transport.js';
 import { createCostEntry, getCostEntry } from '../stores/costs.js';
@@ -21,7 +21,7 @@ import { createAccommodation, getAccommodation, updateAccommodation, normalizeAc
 import { createWeatherNote, normalizeWeatherNote, getWeatherNote } from '../stores/weatherNotes.js';
 import { defaultDateRangeForMonths } from '../../lib/weatherOptions.js';
 import { emptyFeeBand, formatFeeBands } from '../../lib/feeBands.js';
-import { formatOpeningHours } from '../../lib/openingHours.js';
+import { formatOpeningHours, isOpeningHoursEmpty, resolveOpeningHoursForWeekday, emptyOpeningHours } from '../../lib/openingHours.js';
 import { CORE_CURRENCIES, getCurrencyOptions, addDestinationCurrency, setExchangeRate, getExchangeRate, convertAmount } from '../currency.js';
 import { createShoppingItem } from '../stores/shoppingItems.js';
 import { createShop, normalizeShop } from '../stores/shops.js';
@@ -36,6 +36,7 @@ import { createPlanning, listPlannings, getPlanning, updatePlanning, deletePlann
 import { createTimelineItem, listTimelineItems, getTimelineItem, updateTimelineItem, deleteTimelineItem, listTimelineItemsForDay, TIMELINE_ITEM_TYPES, TIMELINE_RESEARCH_REF_TYPES } from '../stores/timelineItems.js';
 import { createOptionGroup, listOptionGroupsForPlanning, getOptionGroup, selectOption, deleteOptionGroup } from '../stores/planningOptionGroups.js';
 import { createItemAlternative, listAlternativesForItem, getItemAlternative, updateItemAlternative, deleteItemAlternative } from '../stores/itemAlternatives.js';
+import { weekdayKeyForDate, checkOpeningHours, checkDuration, checkBestTime, validateTimelineItem } from '../../lib/planningValidation.js';
 
 let passed = 0, failed = 0;
 async function test(name, fn) {
@@ -1933,6 +1934,57 @@ await test('planningDayCount / planningDayDate / listPlanningDays compute days f
   // separately persisted, independently-editable thing.
 });
 
+await test('planningDayDate returns local calendar-date components, not a UTC-shifted value — regression for the toISOString() timezone bug', async () => {
+  // The bug: new Date('YYYY-MM-DDT00:00:00') is parsed as LOCAL
+  // midnight, but toISOString() converts to UTC before formatting. In
+  // any timezone AHEAD of UTC (e.g. IST, UTC+5:30), local midnight is
+  // still the PREVIOUS day in UTC, so .toISOString().slice(0,10) would
+  // incorrectly return one day earlier than the actual local date.
+  // planningDayDate must build its YYYY-MM-DD string from the Date
+  // object's own LOCAL getters (getFullYear/getMonth/getDate) so the
+  // result matches the calendar date the Planning was actually created
+  // with, regardless of which timezone Dossier happens to run in.
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const planning = await createPlanning(dest.id, { name: '6-day trip', startDate: '2026-01-10', endDate: '2026-01-15' });
+
+  // The exact Jan 10-15 example from the original requirements.
+  assert.equal(planningDayDate(planning, 1), '2026-01-10', 'Day 1 must be 10 Jan, never shifted to 9 Jan');
+  assert.equal(planningDayDate(planning, 2), '2026-01-11');
+  assert.equal(planningDayDate(planning, 3), '2026-01-12');
+  assert.equal(planningDayDate(planning, 4), '2026-01-13');
+  assert.equal(planningDayDate(planning, 5), '2026-01-14');
+  assert.equal(planningDayDate(planning, 6), '2026-01-15', 'Day 6 must be 15 Jan, never shifted to 14 Jan');
+
+  // Zero-padding: single-digit month and day must still produce
+  // two-digit YYYY-MM-DD, not '2026-1-1' or similar.
+  const earlyYear = await createPlanning(dest.id, { name: 'New Year trip', startDate: '2026-01-01', endDate: '2026-01-02' });
+  assert.equal(planningDayDate(earlyYear, 1), '2026-01-01');
+  assert.equal(planningDayDate(earlyYear, 2), '2026-01-02');
+
+  const singleDigitMonth = await createPlanning(dest.id, { name: 'March trip', startDate: '2026-03-05', endDate: '2026-03-07' });
+  assert.equal(planningDayDate(singleDigitMonth, 1), '2026-03-05');
+
+  // Month boundary: Day N must roll over into the next month correctly.
+  const monthBoundary = await createPlanning(dest.id, { name: 'End of January', startDate: '2026-01-30', endDate: '2026-02-02' });
+  assert.equal(planningDayDate(monthBoundary, 1), '2026-01-30');
+  assert.equal(planningDayDate(monthBoundary, 2), '2026-01-31');
+  assert.equal(planningDayDate(monthBoundary, 3), '2026-02-01', 'rolls into February correctly');
+  assert.equal(planningDayDate(monthBoundary, 4), '2026-02-02');
+
+  // Year boundary: Day N must roll over into the next year correctly.
+  const yearBoundary = await createPlanning(dest.id, { name: 'New Year\'s Eve trip', startDate: '2026-12-30', endDate: '2027-01-02' });
+  assert.equal(planningDayDate(yearBoundary, 1), '2026-12-30');
+  assert.equal(planningDayDate(yearBoundary, 2), '2026-12-31');
+  assert.equal(planningDayDate(yearBoundary, 3), '2027-01-01', 'rolls into the next year correctly');
+  assert.equal(planningDayDate(yearBoundary, 4), '2027-01-02');
+
+  // February in a leap year (2028) vs. a non-leap year (2026).
+  const leapYear = await createPlanning(dest.id, { name: 'Leap year trip', startDate: '2028-02-28', endDate: '2028-03-01' });
+  assert.equal(planningDayDate(leapYear, 1), '2028-02-28');
+  assert.equal(planningDayDate(leapYear, 2), '2028-02-29', 'Feb 29 exists in the 2028 leap year');
+  assert.equal(planningDayDate(leapYear, 3), '2028-03-01');
+});
+
 await test('changing startDate shifts every day\'s calendar date while day numbers stay stable — the core Chunk 1 requirement', async () => {
   const dest = await createDestination({ name: 'Morocco' });
   const planning = await createPlanning(dest.id, { name: 'Shiftable Trip', startDate: '2026-01-10', endDate: '2026-01-15' });
@@ -2605,6 +2657,327 @@ await test('a full v1 -> v8 upgrade chain preserves an original Phase-0-era dest
   assert.equal((await listTimelineItemsForDay(planning.id, 3)).length, 1);
   assert.equal((await listAlternativesForItem(item.id)).length, 1);
   assert.ok(alt.id);
+});
+
+console.log('\n32. Opening-hours: explicit closed flag, additive and backward-compatible (Tour Planning, Chunk 4)');
+await test('emptyOpeningHours() includes closed:false by default; isOpeningHoursEmpty/formatOpeningHours handle closed groups correctly', async () => {
+  const empty = emptyOpeningHours();
+  assert.equal(empty[0].closed, false);
+  assert.equal(isOpeningHoursEmpty(empty), true, 'a blank group with closed:false is still "no information yet"');
+
+  const closedGroup = [{ id: '1', days: ['fri'], ranges: [{ start: '', end: '' }], closed: true }];
+  assert.equal(isOpeningHoursEmpty(closedGroup), false, 'an explicitly closed group is NOT empty/unresearched — it is a real, known fact');
+  assert.equal(formatOpeningHours(closedGroup), 'Fri: Closed');
+
+  const openGroup = [{ id: '1', days: ['daily'], ranges: [{ start: '09:00', end: '17:00' }], closed: false }];
+  assert.equal(formatOpeningHours(openGroup), 'Daily: 09:00–17:00');
+});
+
+await test('resolveOpeningHoursForWeekday distinguishes closed / open / unknown correctly', async () => {
+  const closedFriday = [{ id: '1', days: ['fri'], ranges: [{ start: '', end: '' }], closed: true }];
+  assert.equal(resolveOpeningHoursForWeekday(closedFriday, 'fri').status, 'closed');
+  assert.equal(resolveOpeningHoursForWeekday(closedFriday, 'mon').status, 'unknown', 'Friday-only group says nothing about Monday');
+
+  const openDaily = [{ id: '1', days: ['daily'], ranges: [{ start: '09:00', end: '18:00' }], closed: false }];
+  const openResolved = resolveOpeningHoursForWeekday(openDaily, 'wed');
+  assert.equal(openResolved.status, 'open');
+  assert.deepEqual(openResolved.ranges, [{ start: '09:00', end: '18:00' }]);
+
+  assert.equal(resolveOpeningHoursForWeekday(emptyOpeningHours(), 'mon').status, 'unknown', 'a genuinely blank record is unknown, never closed');
+  assert.equal(resolveOpeningHoursForWeekday([], 'mon').status, 'unknown');
+  assert.equal(resolveOpeningHoursForWeekday(null, 'mon').status, 'unknown');
+});
+
+await test('normalizeAttraction reads a legacy (pre-Chunk-4) openingHours group missing the closed key as closed:false, unchanged meaning', async () => {
+  const legacyRecord = {
+    place: { name: 'Legacy Temple' },
+    openingHours: [{ id: '1', days: ['daily'], ranges: [{ start: '09:00', end: '17:00' }] }], // no `closed` key at all
+  };
+  const normalized = normalizeAttraction(legacyRecord);
+  assert.equal(normalized.openingHours[0].closed, false, 'a legacy group with no closed key reads as false, not undefined/null');
+  assert.equal(resolveOpeningHoursForWeekday(normalized.openingHours, 'mon').status, 'open', 'its original open/hours meaning is completely unchanged');
+});
+
+console.log('\n33. Planning validation: opening hours (Tour Planning, Chunk 4)');
+await test('weekdayKeyForDate resolves the correct weekday for a given calendar date, consistent with the timezone-safe planningDayDate', async () => {
+  assert.equal(weekdayKeyForDate('2026-01-10'), 'sat');
+  assert.equal(weekdayKeyForDate('2026-01-09'), 'fri');
+  assert.equal(weekdayKeyForDate('2026-01-12'), 'mon');
+});
+
+await test('an explicitly closed day produces a critical warning', async () => {
+  const record = { place: { name: 'Grand Mosque' }, openingHours: [{ id: '1', days: ['fri'], ranges: [{ start: '', end: '' }], closed: true }] };
+  const result = checkOpeningHours({ item: { startTime: '10:00', plannedDuration: 60 }, record, weekdayKey: 'fri' });
+  assert.equal(result.level, 'critical');
+  assert.match(result.message, /closed/i);
+});
+
+await test('a planned interval fully within known opening hours produces no warning', async () => {
+  const record = { place: { name: 'Museum' }, openingHours: [{ id: '1', days: ['daily'], ranges: [{ start: '09:00', end: '18:00' }], closed: false }] };
+  const result = checkOpeningHours({ item: { startTime: '10:00', plannedDuration: 60 }, record, weekdayKey: 'mon' }); // 10:00-11:00, fully inside
+  assert.equal(result, null);
+});
+
+await test('a planned interval starting before opening produces a warning', async () => {
+  const record = { place: { name: 'Museum' }, openingHours: [{ id: '1', days: ['daily'], ranges: [{ start: '09:00', end: '18:00' }], closed: false }] };
+  const result = checkOpeningHours({ item: { startTime: '08:00', plannedDuration: 60 }, record, weekdayKey: 'mon' }); // 08:00-09:00, starts before opening
+  assert.equal(result.level, 'warning');
+  assert.match(result.message, /opening hours/i);
+});
+
+await test('a planned interval ending after closing produces a warning — the FULL interval is checked, not just the start time', async () => {
+  const record = { place: { name: 'Museum' }, openingHours: [{ id: '1', days: ['daily'], ranges: [{ start: '09:00', end: '18:00' }], closed: false }] };
+  // Starts at 17:30, well within hours, but the 60-minute duration
+  // pushes the end to 18:30 — past closing. Checking only the start
+  // time would incorrectly pass this; the whole interval must be used.
+  const result = checkOpeningHours({ item: { startTime: '17:30', plannedDuration: 60 }, record, weekdayKey: 'mon' });
+  assert.equal(result.level, 'warning');
+});
+
+await test('unknown/missing opening-hours information produces NO warning, regardless of the planned time', async () => {
+  const neverResearched = { place: { name: 'New place' }, openingHours: emptyOpeningHours() };
+  assert.equal(checkOpeningHours({ item: { startTime: '23:00', plannedDuration: 500 }, record: neverResearched, weekdayKey: 'mon' }), null);
+
+  const noRecordAtAll = null;
+  assert.equal(checkOpeningHours({ item: { startTime: '23:00' }, record: noRecordAtAll, weekdayKey: 'mon' }), null);
+
+  const noStartTime = { place: { name: 'Museum' }, openingHours: [{ id: '1', days: ['daily'], ranges: [{ start: '09:00', end: '18:00' }], closed: false }] };
+  assert.equal(checkOpeningHours({ item: { startTime: '', plannedDuration: 60 }, record: noStartTime, weekdayKey: 'mon' }), null, 'no startTime means nothing to compare');
+});
+
+await test('a day-of-week that IS covered by hours info but a DIFFERENT day-group is unknown for the requested day never warns', async () => {
+  // Only Friday is researched (and it's closed); Monday has no
+  // information at all and must never be treated as closed by
+  // inference from Friday's data.
+  const record = { place: { name: 'Grand Mosque' }, openingHours: [{ id: '1', days: ['fri'], ranges: [{ start: '', end: '' }], closed: true }] };
+  const result = checkOpeningHours({ item: { startTime: '10:00', plannedDuration: 60 }, record, weekdayKey: 'mon' });
+  assert.equal(result, null);
+});
+
+console.log('\n34. Planning validation: structured typical duration (Tour Planning, Chunk 4)');
+await test('a planned duration outside the structured typical range is informational, non-blocking', async () => {
+  const record = { typicalDurationMin: 60, typicalDurationMax: 90 };
+  assert.equal(checkDuration({ item: { plannedDuration: 75 }, record }), null, 'within range -> no finding');
+  const tooLong = checkDuration({ item: { plannedDuration: 150 }, record });
+  assert.equal(tooLong.level, 'info', 'a duration mismatch is informational, never a warning/critical level');
+  assert.match(tooLong.message, /150/);
+  assert.match(tooLong.message, /60–90/);
+});
+
+await test('an unresearched structured duration (both min and max null) never produces a finding', async () => {
+  const record = { typicalDurationMin: null, typicalDurationMax: null };
+  assert.equal(checkDuration({ item: { plannedDuration: 999 }, record }), null);
+});
+
+await test('checkDuration does not require plannedDuration to be set — a blank plannedDuration produces no finding', async () => {
+  const record = { typicalDurationMin: 30, typicalDurationMax: 60 };
+  assert.equal(checkDuration({ item: { plannedDuration: null }, record }), null);
+  assert.equal(checkDuration({ item: {}, record }), null);
+});
+
+await test('the free-text duration fields (typicallySpent / transport duration) are never removed or repurposed by the structured fields', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const attraction = await createAttraction(dest.id, { place: { name: 'Sigiriya' }, typicallySpent: '2-3 hours', typicalDurationMin: 120, typicalDurationMax: 180 });
+  assert.equal(attraction.typicallySpent, '2-3 hours', 'the original free-text field is completely untouched by the new structured fields');
+  assert.equal(attraction.typicalDurationMin, 120);
+  assert.equal(attraction.typicalDurationMax, 180);
+
+  const transportEntry = await createTransportEntry(dest.id, { from: { label: 'Colombo' }, to: { label: 'Kandy' }, duration: '3 hours', typicalDurationMin: 150, typicalDurationMax: 210 });
+  assert.equal(transportEntry.duration, '3 hours');
+  assert.equal(transportEntry.typicalDurationMin, 150);
+
+  const restaurantEntry = await createRestaurantEntry(dest.id, { place: { name: 'Ministry of Crab' }, typicalDurationMin: 60, typicalDurationMax: 90 });
+  assert.equal(restaurantEntry.typicalDurationMin, 60);
+  assert.equal(restaurantEntry.typicalDurationMax, 90);
+});
+
+console.log('\n35. Planning validation: structured best time (Tour Planning, Chunk 4)');
+await test('a scheduled time within the structured best-time window produces no hint', async () => {
+  const record = { bestTimeStart: '06:00', bestTimeEnd: '08:00' };
+  assert.equal(checkBestTime({ item: { startTime: '07:00' }, record }), null);
+});
+
+await test('a scheduled time outside the structured best-time window produces an informational hint, never a blocking warning', async () => {
+  const record = { bestTimeStart: '06:00', bestTimeEnd: '08:00', bestTimeNote: 'Fewer crowds' };
+  const result = checkBestTime({ item: { startTime: '14:00' }, record });
+  assert.equal(result.level, 'hint', 'best-time is always a hint, never a warning/critical level');
+  assert.match(result.message, /06:00–08:00/);
+  assert.match(result.message, /Fewer crowds/);
+});
+
+await test('best-time information never blocks and this module never mutates the timeline item\'s own time', async () => {
+  const record = { bestTimeStart: '06:00', bestTimeEnd: '08:00' };
+  const item = { startTime: '14:00' };
+  checkBestTime({ item, record });
+  assert.equal(item.startTime, '14:00', 'the item object passed in is never mutated');
+});
+
+await test('no structured best-time data at all (existing coarse bestTimeOfDay only) produces no hint from checkBestTime', async () => {
+  const record = { bestTimeStart: '', bestTimeEnd: '', bestTimeNote: '', bestTimeOfDay: { option: 'Early morning', note: '' } };
+  assert.equal(checkBestTime({ item: { startTime: '14:00' }, record }), null, 'checkBestTime only looks at the new structured fields, which are unset here');
+});
+
+await test('normalizeAttraction defaults the new structured best-time/duration fields to null/empty for a pre-Chunk-4 record, and keeps the existing coarse bestTimeOfDay untouched', async () => {
+  const legacyRecord = { place: { name: 'Old Fort' }, bestTimeOfDay: { option: 'Morning', note: 'Cooler then' } };
+  const normalized = normalizeAttraction(legacyRecord);
+  assert.equal(normalized.bestTimeStart, '');
+  assert.equal(normalized.bestTimeEnd, '');
+  assert.equal(normalized.bestTimeNote, '');
+  assert.equal(normalized.typicalDurationMin, null);
+  assert.equal(normalized.typicalDurationMax, null);
+  assert.deepEqual(normalized.bestTimeOfDay, { option: 'Morning', note: 'Cooler then' }, 'the existing coarse bestTimeOfDay is completely preserved, not replaced');
+});
+
+console.log('\n36. Chunk 3 behavior remains correct under Chunk 4 (Option groups, alternatives, inclusion context)');
+await test('validateTimelineItem runs identically for an item inside a SELECTED vs UNSELECTED Option — validation itself is unaware of Option selection state', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-09', endDate: '2026-01-16' }); // Jan 9 2026 = Friday
+  const mosque = await createAttraction(dest.id, { place: { name: 'Grand Mosque' }, openingHours: [{ id: '1', days: ['fri'], ranges: [{ start: '', end: '' }], closed: true }] });
+  const group = await createOptionGroup(planning.id, { dayNumber: 1, partLabel: 'Morning' });
+
+  const itemInOptionA = await createTimelineItem(planning.id, 1, { itemType: 'attraction', researchRefType: 'attractions', researchRefId: mosque.id, optionGroupId: group.id, optionLabel: 'A', startTime: '10:00', plannedDuration: 60 });
+  const itemInOptionB = await createTimelineItem(planning.id, 1, { itemType: 'attraction', researchRefType: 'attractions', researchRefId: mosque.id, optionGroupId: group.id, optionLabel: 'B', startTime: '10:00', plannedDuration: 60 });
+
+  await selectOption(group.id, 'A'); // Option B is now the UNSELECTED one
+
+  const weekdayKey = weekdayKeyForDate(planningDayDate(planning, 1));
+  assert.equal(weekdayKey, 'fri');
+
+  const findingsA = validateTimelineItem({ item: itemInOptionA, record: mosque, weekdayKey });
+  const findingsB = validateTimelineItem({ item: itemInOptionB, record: mosque, weekdayKey });
+  // Both items reference the same closed-on-Friday mosque at the same
+  // time — the closed-day FACT is identical regardless of which
+  // Option is currently selected. Chunk 4 validation deliberately has
+  // no awareness of Option selection state (see planningValidation.js
+  // design note) — that's a presentation decision for the UI layer,
+  // not something this pure logic should encode.
+  assert.equal(findingsA.openingHours.level, 'critical');
+  assert.equal(findingsB.openingHours.level, 'critical');
+});
+
+await test('an item alternative under an item in an UNSELECTED Option still does not count as current itinerary inclusion — Chunk 3 behavior unaffected by Chunk 4', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-15' });
+  const group = await createOptionGroup(planning.id, { dayNumber: 3, partLabel: 'Morning' });
+  const optionBItem = await createTimelineItem(planning.id, 3, { itemType: 'meal', title: 'Lunch (Option B)', optionGroupId: group.id, optionLabel: 'B' });
+  const altUnderB = await createItemAlternative(optionBItem.id, { title: 'Backup restaurant', selected: true });
+
+  await selectOption(group.id, 'A'); // Option A selected, not B
+
+  const currentGroup = await getOptionGroup(group.id);
+  const isParentItemCurrentlyIncluded = currentGroup.selectedOptionLabel === optionBItem.optionLabel;
+  assert.equal(isParentItemCurrentlyIncluded, false, 'exactly the same Chunk 3 inheritance behavior as before Chunk 4 was added');
+  const stillSelected = await getItemAlternative(altUnderB.id);
+  assert.equal(stillSelected.selected, true, 'the alternative\'s own selected flag is unaffected either way');
+});
+
+await test('unselected Options remain visible as planned possibilities, and their items are still individually validated — Chunk 3 + Chunk 4 combined', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-09', endDate: '2026-01-16' }); // Jan 9 2026 = Friday
+  const mosque = await createAttraction(dest.id, { place: { name: 'Grand Mosque' }, openingHours: [{ id: '1', days: ['fri'], ranges: [{ start: '', end: '' }], closed: true }] });
+  const group = await createOptionGroup(planning.id, { dayNumber: 1, partLabel: 'Morning' });
+  const optionBItem = await createTimelineItem(planning.id, 1, { itemType: 'attraction', researchRefType: 'attractions', researchRefId: mosque.id, optionGroupId: group.id, optionLabel: 'B', startTime: '10:00' });
+  await selectOption(group.id, 'A');
+
+  // Option B's item is still there (Chunk 3's own guarantee) AND still
+  // produces its own closed-day finding when checked (Chunk 4) — the
+  // two behaviors compose correctly rather than one suppressing the other.
+  const stillThere = await getTimelineItem(optionBItem.id);
+  assert.ok(stillThere);
+  const weekdayKey = weekdayKeyForDate(planningDayDate(planning, 1));
+  const finding = checkOpeningHours({ item: stillThere, record: mosque, weekdayKey });
+  assert.equal(finding.level, 'critical');
+});
+
+console.log('\n37. Date behavior remains correct under Chunk 4 (derived days, startDate shift, shortened trip)');
+await test('changing the Planning startDate correctly changes which weekday a timeline item\'s validation is checked against, without moving the item', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-08', endDate: '2026-01-13' }); // Jan 8 2026 = Thursday
+  const mosque = await createAttraction(dest.id, { place: { name: 'Grand Mosque' }, openingHours: [{ id: '1', days: ['fri'], ranges: [{ start: '', end: '' }], closed: true }] });
+  const item = await createTimelineItem(planning.id, 1, { itemType: 'attraction', researchRefType: 'attractions', researchRefId: mosque.id, startTime: '10:00', plannedDuration: 60 });
+
+  // Day 1 starts as Thursday — the mosque is only closed on Friday, so no warning yet.
+  const beforeWeekday = weekdayKeyForDate(planningDayDate(planning, 1));
+  assert.equal(beforeWeekday, 'thu');
+  assert.equal(checkOpeningHours({ item, record: mosque, weekdayKey: beforeWeekday }), null);
+
+  // Shift the trip so Day 1 becomes Friday — the exact scenario from
+  // the original requirements. The item is NEVER moved; only which
+  // weekday Day 1 now falls on changes, which changes the validation
+  // result on next check.
+  const shifted = await updatePlanning(planning.id, { startDate: '2026-01-09', endDate: '2026-01-14' }); // Jan 9 2026 = Friday
+  const stillOnDay1 = await getTimelineItem(item.id);
+  assert.equal(stillOnDay1.dayNumber, 1, 'the item never moved — dayNumber is completely unaffected by the date shift');
+
+  const afterWeekday = weekdayKeyForDate(planningDayDate(shifted, 1));
+  assert.equal(afterWeekday, 'fri');
+  const afterFinding = checkOpeningHours({ item: stillOnDay1, record: mosque, weekdayKey: afterWeekday });
+  assert.equal(afterFinding.level, 'critical', 'the exact "Day 1 becomes Friday -> mosque now shows closed" scenario from the original requirements');
+});
+
+await test('shortening a Planning does not delete an out-of-range item, and that item can still be validated using its own dayNumber\'s (now out-of-range) date', async () => {
+  const dest = await createDestination({ name: 'Iceland' });
+  const planning = await createPlanning(dest.id, { name: 'Long trip', startDate: '2026-01-10', endDate: '2026-01-15' });
+  const attraction = await createAttraction(dest.id, { place: { name: 'Glacier tour' }, openingHours: [{ id: '1', days: ['daily'], ranges: [{ start: '08:00', end: '16:00' }], closed: false }] });
+  const day5Item = await createTimelineItem(planning.id, 5, { itemType: 'attraction', researchRefType: 'attractions', researchRefId: attraction.id, startTime: '09:00', plannedDuration: 60 });
+
+  const shortened = await updatePlanning(planning.id, { endDate: '2026-01-13' }); // now only 4 days; Day 5 is out of range
+  assert.equal(planningDayCount(shortened), 4);
+
+  const stillThere = await getTimelineItem(day5Item.id);
+  assert.ok(stillThere, 'the out-of-range item is not deleted by shortening the trip');
+  // Day 5 no longer has a "current" date within the trip, but
+  // planningDayDate still computes a definite calendar date for it
+  // (the UI uses this to visibly mark it out-of-range) — and that date
+  // can still be validated against if desired.
+  const day5Date = planningDayDate(shortened, 5);
+  assert.ok(day5Date, 'planningDayDate still returns a real date for an out-of-range day number, for out-of-range display purposes');
+  assert.equal(day5Date, '2026-01-14');
+  const weekdayKey = weekdayKeyForDate(day5Date);
+  const finding = checkOpeningHours({ item: stillThere, record: attraction, weekdayKey });
+  assert.equal(finding, null, 'within the daily 08:00-16:00 hours -> no warning, proving validation still functions correctly for an out-of-range item');
+});
+
+console.log('\n38. Database compatibility: Chunk 4 additive fields require no version bump and are fully migration-safe');
+await test('a v8-era attraction record with no closed/typicalDuration*/bestTimeStart/bestTimeEnd/bestTimeNote keys at all is read correctly by normalizeAttraction, with no data loss', async () => {
+  // Simulates a record saved before Chunk 4 existed — created directly
+  // via createAttraction (DB_VERSION unchanged at 8; Chunk 4 adds no
+  // new stores and needs no version bump, per the design).
+  const dest = await createDestination({ name: 'Peru' });
+  const preChunk4 = await createAttraction(dest.id, { place: { name: 'Machu Picchu' }, typicallySpent: 'Half a day' });
+  // Directly strip the new fields to simulate an even older record shape
+  // (createAttraction's emptyAttraction() already includes them as
+  // null/'' — this proves normalizeAttraction is ALSO safe against a
+  // record that predates emptyAttraction() ever having them).
+  const strippedRecord = { ...preChunk4 };
+  delete strippedRecord.typicalDurationMin;
+  delete strippedRecord.typicalDurationMax;
+  delete strippedRecord.bestTimeStart;
+  delete strippedRecord.bestTimeEnd;
+  delete strippedRecord.bestTimeNote;
+
+  const normalized = normalizeAttraction(strippedRecord);
+  assert.equal(normalized.typicalDurationMin, null);
+  assert.equal(normalized.typicalDurationMax, null);
+  assert.equal(normalized.bestTimeStart, '');
+  assert.equal(normalized.bestTimeEnd, '');
+  assert.equal(normalized.bestTimeNote, '');
+  assert.equal(normalized.typicallySpent, 'Half a day', 'the original free-text field the record DID have is completely preserved');
+  assert.equal(normalized.place.name, 'Machu Picchu');
+});
+
+await test('a pre-Chunk-4 restaurant/transport record with no typicalDurationMin/Max keys is handled safely by checkDuration (never throws, never warns)', async () => {
+  const dest = await createDestination({ name: 'Vietnam' });
+  const legacyRestaurant = await createRestaurantEntry(dest.id, { place: { name: 'Pho place' } });
+  delete legacyRestaurant.typicalDurationMin;
+  delete legacyRestaurant.typicalDurationMax;
+  assert.doesNotThrow(() => checkDuration({ item: { plannedDuration: 45 }, record: legacyRestaurant }));
+  assert.equal(checkDuration({ item: { plannedDuration: 45 }, record: legacyRestaurant }), null);
+
+  const legacyTransport = normalizeTransportEntry({ from: { label: 'A' }, to: { label: 'B' }, duration: '2 hours' }); // no typicalDurationMin/Max key at all
+  assert.equal(legacyTransport.typicalDurationMin, null);
+  assert.equal(legacyTransport.typicalDurationMax, null);
+  assert.equal(checkDuration({ item: { plannedDuration: 100 }, record: legacyTransport }), null);
 });
 
 console.log(`\n=== ${passed} passed, ${failed} failed ===\n`);

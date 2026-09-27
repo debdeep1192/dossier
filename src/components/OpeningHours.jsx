@@ -1,4 +1,4 @@
-import { Input } from './Field';
+import { Input, Checkbox } from './Field';
 import { OPENING_HOURS_DAYS, emptyOpeningHours } from '../lib/openingHours.js';
 import './OpeningHours.css';
 
@@ -27,7 +27,7 @@ export function OpeningHoursField({ value, onChange }) {
   }
 
   function addGroup() {
-    onChange([...groups, { id: crypto.randomUUID(), days: [], ranges: [{ start: '', end: '' }] }]);
+    onChange([...groups, { id: crypto.randomUUID(), days: [], ranges: [{ start: '', end: '' }], closed: false }]);
   }
 
   function removeGroup(index) {
@@ -44,6 +44,15 @@ export function OpeningHoursField({ value, onChange }) {
 
   function setDaily(groupIndex) {
     updateGroup(groupIndex, { days: ['daily'] });
+  }
+
+  function toggleClosed(groupIndex, closed) {
+    // Explicitly closed (Chunk 4) is a separate, unambiguous flag from
+    // "no ranges entered yet" — see lib/openingHours.js's design note.
+    // Ranges are left as whatever they were; closed:true simply takes
+    // precedence over them (see resolveOpeningHoursForWeekday), so
+    // there's no need to clear them when marking a day-group closed.
+    updateGroup(groupIndex, { closed });
   }
 
   return (
@@ -66,7 +75,12 @@ export function OpeningHoursField({ value, onChange }) {
               ))}
             </div>
           )}
-          {group.ranges.map((range, ri) => (
+          <Checkbox
+            label="Closed on these days"
+            checked={Boolean(group.closed)}
+            onChange={e => toggleClosed(gi, e.target.checked)}
+          />
+          {!group.closed && group.ranges.map((range, ri) => (
             <div key={ri} className="opening-hours__range-row">
               <Input type="time" aria-label="Opens at" value={range.start} onChange={e => updateRange(gi, ri, { start: e.target.value })} />
               <span aria-hidden="true">–</span>
@@ -76,7 +90,9 @@ export function OpeningHoursField({ value, onChange }) {
               )}
             </div>
           ))}
-          <button type="button" className="opening-hours__add-range" onClick={() => addRange(gi)}>+ Add another time range (split hours)</button>
+          {!group.closed && (
+            <button type="button" className="opening-hours__add-range" onClick={() => addRange(gi)}>+ Add another time range (split hours)</button>
+          )}
           {groups.length > 1 && (
             <button type="button" className="opening-hours__remove-group" onClick={() => removeGroup(gi)}>Remove this day group</button>
           )}

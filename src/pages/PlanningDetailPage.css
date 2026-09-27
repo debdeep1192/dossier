@@ -61,6 +61,34 @@
   margin-left: var(--space-2);
 }
 
+/* Chunk 4 — date/time validation indicators */
+.planning-day__warning-badge {
+  margin-left: var(--space-2);
+}
+
+.planning-item__finding {
+  font-size: var(--text-sm);
+  margin: var(--space-1) 0 0;
+  font-weight: 500;
+}
+
+.planning-item__finding--critical {
+  color: var(--color-coral-dark);
+  font-weight: 600;
+}
+
+.planning-item__finding--warning {
+  color: var(--color-coral-dark);
+}
+
+.planning-item__finding--info {
+  color: var(--color-text-secondary);
+}
+
+.planning-item__finding--hint {
+  color: var(--color-teal);
+}
+
 .planning-day__empty {
   color: var(--color-text-muted);
   font-size: var(--text-sm);

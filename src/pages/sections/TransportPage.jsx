@@ -124,6 +124,8 @@ function TransportForm({ destinationId, record, currencies, defaultCurrency, loc
   const [modeOther, setModeOther] = useState(base.modeOther || '');
   const [price, setPrice] = useState(base.price || null);
   const [duration, setDuration] = useState(base.duration || '');
+  const [typicalDurationMin, setTypicalDurationMin] = useState(base.typicalDurationMin ?? '');
+  const [typicalDurationMax, setTypicalDurationMax] = useState(base.typicalDurationMax ?? '');
   const [schedule, setSchedule] = useState(base.schedule || '');
   const [bookingNotes, setBookingNotes] = useState(base.bookingNotes || '');
   const [error, setError] = useState('');
@@ -146,6 +148,8 @@ function TransportForm({ destinationId, record, currencies, defaultCurrency, loc
     !isMoneyEmpty(base.price),
     base.duration,
     base.schedule,
+    base.typicalDurationMin,
+    base.typicalDurationMax,
   );
 
   function handleModeChange(newMode) {
@@ -186,6 +190,8 @@ function TransportForm({ destinationId, record, currencies, defaultCurrency, loc
         locationId: travelType === 'local' ? locationId : null,
         journeyId,
         mode, modeOther: mode === 'Other' ? modeOther : '', price, duration, schedule, bookingNotes,
+        typicalDurationMin: typicalDurationMin === '' ? null : Number(typicalDurationMin),
+        typicalDurationMax: typicalDurationMax === '' ? null : Number(typicalDurationMax),
       };
       if (record) await updateTransportEntry(record.id, fields);
       else await createTransportEntry(destinationId, fields);
@@ -236,6 +242,10 @@ function TransportForm({ destinationId, record, currencies, defaultCurrency, loc
         <Disclosure label="Price, duration & schedule" defaultOpen={advancedHasContent}>
           <MoneyField value={price} onChange={setPrice} currencies={currencies} defaultCurrency={defaultCurrency} unitOptions={TRANSPORT_PRICE_UNITS} defaultUnit={TRANSPORT_DEFAULT_UNIT_BY_MODE[mode] || 'Per person'} onAddCurrency={onAddCurrency} />
           <Input label="Duration" value={duration} onChange={e => setDuration(e.target.value)} placeholder="e.g. 3 hours" />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-2)' }}>
+            <Input label="Typical duration, min (minutes)" type="number" min="0" value={typicalDurationMin} onChange={e => setTypicalDurationMin(e.target.value)} hint="Used by Tour Planning to flag a planned duration outside this range." />
+            <Input label="Typical duration, max (minutes)" type="number" min="0" value={typicalDurationMax} onChange={e => setTypicalDurationMax(e.target.value)} />
+          </div>
           <Input label="Schedule / frequency" value={schedule} onChange={e => setSchedule(e.target.value)} />
         </Disclosure>
 

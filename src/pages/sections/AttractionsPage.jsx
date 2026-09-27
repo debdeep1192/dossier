@@ -201,8 +201,13 @@ function AttractionForm({ destinationId, destinationName, record, currencies, de
   const [videographyCharge, setVideographyCharge] = useState(base.videographyCharge || null);
   const [openingHours, setOpeningHours] = useState(base.openingHours || []);
   const [typicallySpent, setTypicallySpent] = useState(base.typicallySpent || '');
+  const [typicalDurationMin, setTypicalDurationMin] = useState(base.typicalDurationMin ?? '');
+  const [typicalDurationMax, setTypicalDurationMax] = useState(base.typicalDurationMax ?? '');
   const [bestTimeOption, setBestTimeOption] = useState(base.bestTimeOfDay?.option || '');
   const [bestTimeNote, setBestTimeNote] = useState(base.bestTimeOfDay?.note || '');
+  const [bestTimeStart, setBestTimeStart] = useState(base.bestTimeStart || '');
+  const [bestTimeEnd, setBestTimeEnd] = useState(base.bestTimeEnd || '');
+  const [bestTimeSpecificNote, setBestTimeSpecificNote] = useState(base.bestTimeNote || '');
   const [visitPriority, setVisitPriority] = useState(base.visitPriority || '');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -214,6 +219,10 @@ function AttractionForm({ destinationId, destinationName, record, currencies, de
     formatOpeningHours(base.openingHours),
     base.typicallySpent,
     base.bestTimeOfDay?.option,
+    base.typicalDurationMin,
+    base.typicalDurationMax,
+    base.bestTimeStart,
+    base.bestTimeEnd,
   );
 
   async function refreshJourneys() {
@@ -230,7 +239,10 @@ function AttractionForm({ destinationId, destinationName, record, currencies, de
         place, locationId, journeyId, category, categoryOther: category === 'Other' ? categoryOther : '', description,
         feeBands, cameraCharge: hasCameraCharge ? cameraCharge : null, videographyCharge: hasVideographyCharge ? videographyCharge : null,
         openingHours, typicallySpent,
+        typicalDurationMin: typicalDurationMin === '' ? null : Number(typicalDurationMin),
+        typicalDurationMax: typicalDurationMax === '' ? null : Number(typicalDurationMax),
         bestTimeOfDay: { option: bestTimeOption, note: bestTimeNote },
+        bestTimeStart, bestTimeEnd, bestTimeNote: bestTimeSpecificNote,
         visitPriority: visitPriority || null,
       };
       if (record) await updateAttraction(record.id, fields);
@@ -282,6 +294,24 @@ function AttractionForm({ destinationId, destinationName, record, currencies, de
           {hasVideographyCharge && <MoneyField label="" value={videographyCharge} onChange={setVideographyCharge} currencies={currencies} defaultCurrency={defaultCurrency} onAddCurrency={onAddCurrency} />}
 
           <OpeningHoursField value={openingHours} onChange={setOpeningHours} />
+
+          {/* Structured typical duration / best-time (Tour Planning,
+              Chunk 4) — additive, alongside the existing free-text
+              "Typically spent" and coarse "Best time of day" fields
+              above, which are left completely as-is. These structured
+              values are what Planning's date/time validation actually
+              compares against; leaving them blank just means Planning
+              can't validate duration/best-time for this record yet —
+              never an error, never required. */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-2)' }}>
+            <Input label="Typical duration, min (minutes)" type="number" min="0" value={typicalDurationMin} onChange={e => setTypicalDurationMin(e.target.value)} hint="Used by Tour Planning to flag an unusually short/long visit." />
+            <Input label="Typical duration, max (minutes)" type="number" min="0" value={typicalDurationMax} onChange={e => setTypicalDurationMax(e.target.value)} />
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-2)' }}>
+            <Input label="Best time to visit — from" type="time" value={bestTimeStart} onChange={e => setBestTimeStart(e.target.value)} />
+            <Input label="Best time to visit — to" type="time" value={bestTimeEnd} onChange={e => setBestTimeEnd(e.target.value)} />
+          </div>
+          <Input label="Best-time note" value={bestTimeSpecificNote} onChange={e => setBestTimeSpecificNote(e.target.value)} placeholder="e.g. Fewer crowds, better light for photos" hint="Informational only — Planning will never move an item to match this." />
         </Disclosure>
 
         {error && <p className="form-error" role="alert">{error}</p>}
