@@ -11,7 +11,7 @@
 // Run with: node src/db/__tests__/addEntry.test.js
 
 import assert from 'node:assert/strict';
-import { buildAddDestinationPath, SECTIONS_WITHOUT_AUTO_OPEN, matchCurrentSection, consumeAutoOpenFlag } from '../../lib/addEntryRouting.js';
+import { buildAddDestinationPath, SECTIONS_WITHOUT_AUTO_OPEN, matchCurrentSection, consumeAutoOpenFlag, isPlanningPath } from '../../lib/addEntryRouting.js';
 
 let passed = 0, failed = 0;
 async function test(name, fn) {
@@ -159,6 +159,34 @@ await test('consumeAutoOpenFlag never touches params it does not know about (def
   assert.equal(cleaned.get('location'), 'loc-xyz');
   assert.equal(cleaned.get('tab'), 'research');
   assert.equal(cleaned.get('new'), null);
+});
+
+console.log('\n5. isPlanningPath — Tour Planning "+ Add" cleanup: hiding the global Add affordance inside Planning');
+await test('the Plannings list page and any single Planning\'s own page are recognized as Planning paths', () => {
+  assert.equal(isPlanningPath('/plannings'), true);
+  assert.equal(isPlanningPath('/plannings/new'), true);
+  assert.equal(isPlanningPath('/plannings/abc-123'), true);
+  assert.equal(isPlanningPath('/plannings/abc-123/'), true, 'a trailing slash is still recognized');
+});
+
+await test('Research/Destination pages and Home are NOT treated as Planning paths — the global Add affordance must remain there', () => {
+  assert.equal(isPlanningPath('/'), false);
+  assert.equal(isPlanningPath('/destinations/dest-1'), false);
+  assert.equal(isPlanningPath('/destinations/dest-1/attractions'), false);
+  assert.equal(isPlanningPath('/people'), false);
+});
+
+await test('isPlanningPath does not false-positive on a path that merely starts with the same letters', () => {
+  // A hypothetical '/planningsomethingelse' route (none exists today,
+  // but this guards the string-prefix check from ever being too loose)
+  // must not be mistaken for a real /plannings path.
+  assert.equal(isPlanningPath('/planningsomethingelse'), false);
+});
+
+await test('isPlanningPath handles missing/empty input safely, defaulting to "not a Planning path" rather than throwing', () => {
+  assert.equal(isPlanningPath(''), false);
+  assert.equal(isPlanningPath(null), false);
+  assert.equal(isPlanningPath(undefined), false);
 });
 
 console.log(`\n=== ${passed} passed, ${failed} failed ===\n`);

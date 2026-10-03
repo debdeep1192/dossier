@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { Link, NavLink, Outlet, useMatch, useSearchParams, useNavigate } from 'react-router-dom';
+import { Link, NavLink, Outlet, useMatch, useLocation, useSearchParams, useNavigate } from 'react-router-dom';
 import AddEntry from './AddEntry';
 import { SECTIONS } from '../sectionRegistry.js';
-import { matchCurrentSection, buildAddDestinationPath } from '../lib/addEntryRouting.js';
+import { matchCurrentSection, buildAddDestinationPath, isPlanningPath } from '../lib/addEntryRouting.js';
 import { AddEntryProvider } from '../lib/addEntryContext.js';
 import './AppShell.css';
 
@@ -32,6 +32,21 @@ export default function AppShell({ children }) {
   // trigger (which now opens THIS same shared modal — see
   // lib/addEntryContext.js — rather than mounting a second instance).
   const destinationMatch = useMatch('/destinations/:destinationId/*');
+  // Tour Planning: the global "+ Add to Dossier" affordance must not be
+  // reachable from inside Planning — Planning's own content additions
+  // (Research references via ResearchPicker, custom timeline items,
+  // itinerary Options, item alternatives) all go through Planning's
+  // own controls on PlanningDetailPage, never through this global
+  // Research/Dossier flow, which would otherwise let someone
+  // accidentally create/mutate a global Research record while working
+  // inside a Planning. isPlanningPath is the pure, testable decision
+  // (see lib/addEntryRouting.js); useLocation() just supplies the
+  // live pathname it needs, the same way destinationMatch above
+  // supplies context for matchCurrentSection. This is the one, single
+  // point that flow is triggered from (see the FAB below), so hiding
+  // it here is sufficient — nothing else in the app opens this modal.
+  const location = useLocation();
+  const onPlanningPath = isPlanningPath(location.pathname);
   const [searchParams] = useSearchParams();
   const currentDestinationId = destinationMatch?.params?.destinationId;
   const currentLocationId = searchParams.get('location') || null;
@@ -54,6 +69,7 @@ export default function AppShell({ children }) {
   // AddEntry.jsx), and inside a section page (skip straight to that
   // section's real form via currentSection below).
   function openAdd() {
+    if (onPlanningPath) return; // never reachable from inside Planning — see isPlanningPath above
     if (currentSection) {
       navigate(buildAddDestinationPath(currentSection, currentDestinationId, currentLocationId));
       return;
@@ -85,17 +101,17 @@ export default function AppShell({ children }) {
           </main>
         </div>
 
-        {/* The ONE Add affordance, in every context, mobile and
-            desktop alike — see openAdd() above for how it resolves
-            straight to the real section form when currentSection is
-            already known (no type picker), or opens the type-picker
-            modal otherwise. Section pages' own former header/EmptyState
-            "+ Add" controls are intentionally removed (see
+        {/* The ONE Add affordance, in every context EXCEPT Planning
+            (see onPlanningPath above and openAdd()'s guard) — mobile
+            and desktop alike. Section pages' own former header/
+            EmptyState "+ Add" controls are intentionally removed (see
             SectionPageLayout.jsx and each section page) so this is
             never one of two competing buttons on the same screen. */}
-        <button type="button" className="app-shell__fab" onClick={openAdd} aria-label="Add to Dossier">
-          +
-        </button>
+        {!onPlanningPath && (
+          <button type="button" className="app-shell__fab" onClick={openAdd} aria-label="Add to Dossier">
+            +
+          </button>
+        )}
 
         <nav className="app-shell__bottom-nav">
           {NAV_ITEMS.map(item => (
@@ -106,12 +122,14 @@ export default function AppShell({ children }) {
           ))}
         </nav>
 
-        <AddEntry
-          open={addOpen}
-          onClose={() => setAddOpen(false)}
-          initialDestinationId={currentDestinationId}
-          initialLocationId={currentLocationId}
-        />
+        {!onPlanningPath && (
+          <AddEntry
+            open={addOpen}
+            onClose={() => setAddOpen(false)}
+            initialDestinationId={currentDestinationId}
+            initialLocationId={currentLocationId}
+          />
+        )}
       </div>
     </AddEntryProvider>
   );

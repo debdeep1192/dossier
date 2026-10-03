@@ -46,6 +46,22 @@ export function matchCurrentSection(pathname, destinationId, sections) {
   return sections.find(s => s.path === rest) || null;
 }
 
+// Tour Planning: whether the given pathname is anywhere inside the
+// Planning feature (the Plannings list, or any single Planning's own
+// detail/edit page). Used by AppShell.jsx to hide the single global
+// "+ Add to Dossier" affordance while inside Planning — Planning has
+// its own dedicated ways to add content (ResearchPicker, custom
+// timeline items, itinerary Options, item alternatives), and the
+// global flow would otherwise let someone accidentally create/mutate
+// a Research record from within a Planning screen. Kept here as a
+// pure function, alongside matchCurrentSection's own pure routing
+// logic, specifically so it's testable by this project's plain-Node
+// test harness without needing a React component test.
+export function isPlanningPath(pathname) {
+  if (!pathname) return false;
+  return pathname === '/plannings' || pathname.startsWith('/plannings/');
+}
+
 // Pure representation of the URL transformation
 // hooks/useAutoOpenNewForm.js applies once it has consumed `?new=1`:
 // the `new` flag is removed so refreshing/navigating back doesn't
