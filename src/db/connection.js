@@ -71,7 +71,18 @@ const DB_NAME = 'dossier';
 // additive "create if missing" pattern as every prior bump; no
 // existing store, field, or record is touched, migrated, or
 // reinterpreted.
-const DB_VERSION = 8;
+// v8 -> v9: added the `appSettings` store (Tour Planning cost
+// calculation, home-currency correction — see db/appSettings.js). One
+// tiny, single-purpose store holding a single fixed-id record for the
+// user's home currency (used by the Planning cost summary's
+// home-currency total — see lib/planningCosts.js). Deliberately NOT a
+// general settings system: one key, one record, nothing else lives
+// here. Destination-level defaultCurrency (see db/currency.js) is
+// unrelated and untouched — the two concepts are kept separate on
+// purpose, per the explicit "do not use destination currency as home
+// currency" correction. Purely additive; no existing store, field, or
+// record changes.
+const DB_VERSION = 9;
 
 // One object store per research section (each a genuinely distinct
 // shape defined in db/stores/*.js — never a shared "item_kind" bucket),
@@ -106,6 +117,7 @@ const STORE_DEFS = [
     keyPath: 'id',
     indexes: [['intakeId', 'intakeId'], ['status', 'status'], ['destinationId', 'destinationId']],
   },
+  { name: 'appSettings', keyPath: 'id', indexes: [] },
 ];
 
 // The stores that hold actual research entries (everything except

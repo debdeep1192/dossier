@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { getPlanning, createPlanning, updatePlanning, deletePlanning, listPlanningDays } from '../db/stores/plannings';
 import { listDestinations, getDestination } from '../db/stores/destinations';
@@ -11,6 +11,15 @@ import { listRestaurantEntries, isPlaceBased } from '../db/stores/restaurants';
 import { listAccommodations } from '../db/stores/accommodations';
 import { listTransportEntries } from '../db/stores/transport';
 import { weekdayKeyForDate, validateTimelineItem } from '../lib/planningValidation';
+import {
+  ageAsOf, nightsForAccommodationItem, calculateItemCost,
+  calculatePlanningCostBreakdown, convertTotalToHomeCurrency, COST_CATEGORIES,
+  calculateAttractionCost, calculateRestaurantCost, calculateTransportCost, calculateAccommodationCost, calculateCustomItemCost,
+} from '../lib/planningCosts';
+import { isFeeBandEmpty } from '../lib/feeBands';
+import { getCurrencyOptions, convertAmount, CORE_CURRENCIES } from '../db/currency';
+import { getHomeCurrency, setHomeCurrency } from '../db/appSettings';
+import { MoneyField, formatMoney } from '../components/Money';
 import { useCachedQuery, invalidateCachedQuery } from '../hooks/useCachedQuery';
 import Card from '../components/Card';
 import Button from '../components/Button';
@@ -27,6 +36,14 @@ const ITEM_TYPE_LABELS = {
   accommodation: 'Accommodation',
   free_time: 'Free time',
   custom: 'Custom / general',
+};
+
+const COST_CATEGORY_LABELS = {
+  accommodation: 'Accommodation',
+  transport: 'Transport',
+  attractions: 'Attractions / Activities',
+  food: 'Food / Restaurants',
+  other: 'Other',
 };
 
 // The next Option label after whatever's already in use for a group —
@@ -60,6 +77,18 @@ function describeReferencedRecord(refType, record) {
   }
 }
 
+// Small local display helper for one fee band's amount, inside the
+// cost-editing checkboxes below — deliberately not reaching into
+// lib/feeBands.js's own formatSingleBand (a private helper of that
+// file's formatFeeBands, not exported) since this needs a slightly
+// different, more compact phrasing suited to a checkbox label.
+function formatSingleFeeBandAmount(band) {
+  if (band.status === 'free') return 'Free';
+  if (band.status === 'nominal') return band.amount ? `${band.currency} ${band.amount} (nominal)` : 'Nominal/donation';
+  if (band.status === 'paid' && band.amount) return `${band.currency} ${band.amount}`;
+  return 'Amount not set';
+}
+
 // Handles both /plannings/new (planningId undefined) and
 // /plannings/:planningId (edit) — same shape of dual-purpose page as
 // several section forms already have (e.g. record ? update : create).
@@ -86,15 +115,20 @@ export default function PlanningDetailPage() {
       planning ? listTimelineItems(planning.id) : Promise.resolve([]),
       planning ? listOptionGroupsForPlanning(planning.id) : Promise.resolve([]),
     ]);
-    // Research records referenced by timeline items are resolved here,
-    // once, for the whole page — never duplicated onto the timeline
-    // item itself. Only fetched for the ref types actually in use.
+    // Research records referenced by timeline items/alternatives are
+    // resolved here, once, for the whole page — never duplicated onto
+    // the timeline item itself. All four itinerary-relevant Research
+    // types are loaded (not just types already in use), since a newly
+    // attached Research item, or an item alternative, can reference a
+    // type no existing timeline item uses yet — and cost calculation
+    // needs the referenced record's prices/fee bands for those too.
+    // Same small, single-destination data scale ResearchPicker.jsx
+    // already assumes, so this is four cheap indexed reads.
     const researchByTypeAndId = {};
     if (planning) {
-      const refTypesUsed = [...new Set(timelineItems.map(i => i.researchRefType).filter(Boolean))];
       const sectionListFns = { attractions: listAttractions, restaurants: listRestaurantEntries, accommodations: listAccommodations, transport: listTransportEntries };
-      await Promise.all(refTypesUsed.map(async (type) => {
-        const records = await sectionListFns[type](planning.destinationId);
+      await Promise.all(Object.entries(sectionListFns).map(async ([type, listFn]) => {
+        const records = await listFn(planning.destinationId);
         researchByTypeAndId[type] = Object.fromEntries(records.map(r => [r.id, r]));
       }));
     }
@@ -106,6 +140,15 @@ export default function PlanningDetailPage() {
   if (loading && !data) return <LoadingState label="Loading…" />;
 
   const { destinations, people, planning, destination, timelineItems, optionGroups, researchByTypeAndId } = data;
+
+  // Traveller ages as of the Planning's start date — computed once here
+  // and shared by the cost summary and the per-item cost editor, so
+  // both always agree. Recomputed on every render from the live
+  // startDate/dob values, never stored.
+  const travellerAges = planning
+    ? people.filter(p => planning.travellerIds.includes(p.id)).map(p => ageAsOf(p.dob, planning.startDate)).filter(age => age !== null)
+    : [];
+  const currencyOptions = getCurrencyOptions(destination);
 
   async function handleDelete() {
     if (!window.confirm(`Delete "${planning.name}"?`)) return;
@@ -153,8 +196,159 @@ export default function PlanningDetailPage() {
           timelineItems={timelineItems}
           optionGroups={optionGroups}
           researchByTypeAndId={researchByTypeAndId}
+          travellerAges={travellerAges}
+          currencyOptions={currencyOptions}
           onChange={afterTimelineChange}
         />
+      )}
+
+      {!isNew && (
+        <PlanningCostSummary
+          planning={planning}
+          travellerAges={travellerAges}
+          timelineItems={timelineItems}
+          optionGroups={optionGroups}
+          researchByTypeAndId={researchByTypeAndId}
+        />
+      )}
+    </div>
+  );
+}
+
+// Planning cost summary — estimates only, never actual-spending
+// tracking. Computed live from timelineItems + itemAlternatives +
+// their resolved Research records + the Planning's own travellers,
+// via lib/planningCosts.js — nothing here is persisted as "the
+// total"; every render recalculates fresh, so an Option reselection,
+// a fee-band toggle, or an override edit is reflected immediately
+// with no separate "recompute" step. Only currently-included items
+// (see isTimelineItemCurrentlyIncluded/isAlternativeCurrentlyIncluded)
+// contribute — an unselected Option's items, or an unresolved Option
+// group's items, contribute nothing, exactly per the approved design.
+function PlanningCostSummary({ planning, travellerAges, timelineItems, optionGroups, researchByTypeAndId }) {
+  const [homeTotal, setHomeTotal] = useState(undefined); // undefined = not yet computed, null = no rate available
+  // The home currency is a small GLOBAL setting (db/appSettings.js),
+  // deliberately independent of this (or any) destination's own
+  // defaultCurrency — a Planning's home-currency total should not
+  // silently change meaning just because the destination's default
+  // currency happens to be set to something else. See the correction
+  // note in db/appSettings.js for why this isn't destination-scoped.
+  const [homeCurrency, setHomeCurrencyState] = useState(null); // null = not yet loaded
+
+  useEffect(() => {
+    let cancelled = false;
+    getHomeCurrency().then(code => { if (!cancelled) setHomeCurrencyState(code); });
+    return () => { cancelled = true; };
+  }, []);
+
+  async function handleHomeCurrencyChange(code) {
+    await setHomeCurrency(code);
+    setHomeCurrencyState(code);
+  }
+
+  const optionGroupsById = Object.fromEntries(optionGroups.map(g => [g.id, g]));
+
+  function getRecordForItem(item) {
+    if (!item.researchRefId) return null;
+    return researchByTypeAndId[item.researchRefType]?.[item.researchRefId] || null;
+  }
+
+  // Item alternatives aren't part of the page's main fetch (they're
+  // loaded per-item, on demand, inside ItemAlternativesPanel while
+  // editing one item — see below) — the cost summary needs ALL of
+  // them across the whole Planning, so it loads them itself here via
+  // the same cache key shape ItemAlternativesPanel already uses,
+  // ensuring both stay in sync after an edit invalidates that key.
+  const alternativesFetcher = useCallback(async () => {
+    const results = await Promise.all(timelineItems.map(async (item) => {
+      const alts = await listAlternativesForItem(item.id);
+      return alts.map(alternative => ({ alternative, parentItem: item }));
+    }));
+    return results.flat();
+  }, [timelineItems]);
+  const { data: alternatives } = useCachedQuery(`planning-cost-alternatives:${planning.id}`, alternativesFetcher);
+
+  const breakdown = calculatePlanningCostBreakdown({
+    items: timelineItems,
+    alternatives: alternatives || [],
+    optionGroupsById,
+    getRecordForItem,
+    travellerAges,
+  });
+
+  // Recompute the converted home-currency total whenever the
+  // underlying currency composition, or the home currency itself,
+  // changes. Keyed by JSON.stringify(overallByCurrency) rather than
+  // the object itself, since a fresh object is recomputed every render
+  // even when its contents haven't changed — this avoids re-fetching a
+  // conversion rate on every keystroke elsewhere on the page. Skipped
+  // entirely until homeCurrency has loaded from appSettings.
+  useEffect(() => {
+    if (!homeCurrency) return;
+    let cancelled = false;
+    convertTotalToHomeCurrency(breakdown.overallByCurrency, homeCurrency, convertAmount).then(total => {
+      if (!cancelled) setHomeTotal(total);
+    });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed by content (JSON.stringify), not object identity, deliberately
+  }, [JSON.stringify(breakdown.overallByCurrency), homeCurrency]);
+
+  return (
+    <div className="planning-cost-summary">
+      <h2>Estimated cost</h2>
+      <p className="planning-cost-summary__disclaimer">Estimates only — not actual spending.</p>
+
+      <div className="planning-cost-summary__categories">
+        {COST_CATEGORIES.map(category => {
+          const amounts = breakdown.categoryTotals[category];
+          const hasAny = Object.keys(amounts).length > 0;
+          return (
+            <div key={category} className="planning-cost-summary__category">
+              <span className="planning-cost-summary__category-label">{COST_CATEGORY_LABELS[category]}</span>
+              <span className="planning-cost-summary__category-amount">
+                {hasAny
+                  ? Object.entries(amounts).map(([currency, amount]) => `${currency === '—' ? '' : currency} ${amount.toLocaleString(undefined, { maximumFractionDigits: 0 })}`).join(' + ')
+                  : '—'}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="planning-cost-summary__total">
+        <span className="planning-cost-summary__total-label">Overall estimate</span>
+        <span className="planning-cost-summary__total-amount">
+          {Object.keys(breakdown.overallByCurrency).length > 0
+            ? Object.entries(breakdown.overallByCurrency).map(([currency, amount]) => `${currency === '—' ? '' : currency} ${amount.toLocaleString(undefined, { maximumFractionDigits: 0 })}`).join(' + ')
+            : 'Not estimated yet'}
+        </span>
+      </div>
+
+      {homeTotal !== undefined && homeTotal !== null && (
+        <p className="planning-cost-summary__home-total">≈ {homeCurrency} {homeTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}</p>
+      )}
+
+      {breakdown.unestimatedItems.length > 0 && (
+        <p className="planning-cost-summary__unestimated">
+          {breakdown.unestimatedItems.length} item{breakdown.unestimatedItems.length === 1 ? '' : 's'} not yet estimated.
+        </p>
+      )}
+
+      {/* A small, inline way to change the global home currency —
+          deliberately not a Settings page (none exists, and this
+          correction explicitly asks not to build one). Changing it
+          here affects every Planning's home-currency total, not just
+          this one, since it's a single global setting. */}
+      {homeCurrency && (
+        <div className="planning-cost-summary__home-currency-picker">
+          <Select
+            label="Home currency"
+            value={homeCurrency}
+            onChange={e => handleHomeCurrencyChange(e.target.value)}
+          >
+            {[...new Set([...CORE_CURRENCIES, homeCurrency])].map(code => <option key={code} value={code}>{code}</option>)}
+          </Select>
+        </div>
       )}
     </div>
   );
@@ -258,7 +452,7 @@ function PlanningForm({ destinations, people, planning, onSaved }) {
 //   - "grouped" items: belong to one of the day's Option groups,
 //     rendered under that group with Option tabs, a Selection-pending
 //     indicator, and a way to pick the current Option.
-function DaysTimeline({ planning, destinationId, timelineItems, optionGroups, researchByTypeAndId, onChange }) {
+function DaysTimeline({ planning, destinationId, timelineItems, optionGroups, researchByTypeAndId, travellerAges, currencyOptions, onChange }) {
   const [addingToDay, setAddingToDay] = useState(null);
   const [editingItem, setEditingItem] = useState(null);
   const [addingGroupToDay, setAddingGroupToDay] = useState(null);
@@ -371,6 +565,7 @@ function DaysTimeline({ planning, destinationId, timelineItems, optionGroups, re
                     <OptionGroupPanel
                       key={group.id}
                       group={group}
+                      travellerAges={travellerAges}
                       items={groupedItemsByGroupId[group.id] || []}
                       researchByTypeAndId={researchByTypeAndId}
                       weekdayKey={weekdayKeyForDate(day.date)}
@@ -394,6 +589,7 @@ function DaysTimeline({ planning, destinationId, timelineItems, optionGroups, re
                           key={item.id}
                           item={item}
                           researchByTypeAndId={researchByTypeAndId}
+                          travellerAges={travellerAges}
                           weekdayKey={weekdayKeyForDate(day.date)}
                           onEdit={() => setEditingItem(item)}
                           onDelete={() => handleDeleteItem(item)}
@@ -412,6 +608,9 @@ function DaysTimeline({ planning, destinationId, timelineItems, optionGroups, re
         <TimelineItemForm
           planningId={planning.id}
           destinationId={destinationId}
+          researchByTypeAndId={researchByTypeAndId}
+          travellerAges={travellerAges}
+          currencyOptions={currencyOptions}
           dayNumber={addingToDay}
           onClose={() => setAddingToDay(null)}
           onSaved={() => { setAddingToDay(null); onChange(); }}
@@ -425,6 +624,8 @@ function DaysTimeline({ planning, destinationId, timelineItems, optionGroups, re
           record={editingItem}
           referencedRecord={editingItem.researchRefType ? researchByTypeAndId[editingItem.researchRefType]?.[editingItem.researchRefId] : null}
           researchByTypeAndId={researchByTypeAndId}
+          travellerAges={travellerAges}
+          currencyOptions={currencyOptions}
           onClose={() => setEditingItem(null)}
           onSaved={() => { setEditingItem(null); onChange(); }}
         />
@@ -441,6 +642,9 @@ function DaysTimeline({ planning, destinationId, timelineItems, optionGroups, re
         <TimelineItemForm
           planningId={planning.id}
           destinationId={destinationId}
+          researchByTypeAndId={researchByTypeAndId}
+          travellerAges={travellerAges}
+          currencyOptions={currencyOptions}
           dayNumber={addingItemToOption.dayNumber}
           partLabel={addingItemToOption.group.partLabel}
           optionGroupId={addingItemToOption.group.id}
@@ -460,7 +664,7 @@ function DaysTimeline({ planning, destinationId, timelineItems, optionGroups, re
 // action so the person isn't limited to only the Options that already
 // exist — the group itself is created empty (see OptionGroupForm) and
 // Options are populated by adding items to them one at a time.
-function OptionGroupPanel({ group, items, researchByTypeAndId, weekdayKey, onSelectOption, onDeleteGroup, onEditItem, onDeleteItem, onAddItemToOption, onAddNewOption }) {
+function OptionGroupPanel({ group, items, researchByTypeAndId, travellerAges, weekdayKey, onSelectOption, onDeleteGroup, onEditItem, onDeleteItem, onAddItemToOption, onAddNewOption }) {
   const itemsByOption = {};
   for (const item of items) (itemsByOption[item.optionLabel] ||= []).push(item);
   const optionLabels = Object.keys(itemsByOption).sort();
@@ -495,6 +699,7 @@ function OptionGroupPanel({ group, items, researchByTypeAndId, weekdayKey, onSel
                   key={item.id}
                   item={item}
                   researchByTypeAndId={researchByTypeAndId}
+                  travellerAges={travellerAges}
                   weekdayKey={weekdayKey}
                   onEdit={() => onEditItem(item)}
                   onDelete={() => onDeleteItem(item)}
@@ -523,10 +728,21 @@ function OptionGroupPanel({ group, items, researchByTypeAndId, weekdayKey, onSel
 // this component has no awareness of Option selection state at all,
 // deliberately, since opening-hours/duration/best-time facts about a
 // place don't depend on whether this particular sequence was chosen.
-function TimelineItemRow({ item, researchByTypeAndId, weekdayKey, onEdit, onDelete }) {
+function TimelineItemRow({ item, researchByTypeAndId, travellerAges, weekdayKey, onEdit, onDelete }) {
   const referencedRecord = item.researchRefType ? researchByTypeAndId[item.researchRefType]?.[item.researchRefId] : null;
   const title = item.researchRefId ? describeReferencedRecord(item.researchRefType, referencedRecord) : item.title;
   const findings = item.researchRefId ? validateTimelineItem({ item, record: referencedRecord, weekdayKey }) : { openingHours: null, duration: null, bestTime: null };
+  // This item's own cost estimate, shown regardless of whether its
+  // Option is currently selected (an unselected Option's items are
+  // still worth seeing an estimate for while comparing Options) —
+  // whether it COUNTS toward the Planning total is decided separately,
+  // in the cost summary, by the inclusion rules. Free/zero-cost items
+  // with no costSelections at all and no Research reference (a plain
+  // custom item nobody put a price on) simply show nothing rather than
+  // a "not estimated" line, so the timeline isn't cluttered by every
+  // free-time/custom entry.
+  const cost = calculateItemCost(item, { record: referencedRecord, travellerAges, nights: item.researchRefType === 'accommodations' ? nightsForAccommodationItem(item) : undefined });
+  const isCostBearingType = ['attractions', 'restaurants', 'accommodations', 'transport'].includes(item.researchRefType);
 
   return (
     <li className="planning-item" onClick={onEdit}>
@@ -542,6 +758,12 @@ function TimelineItemRow({ item, researchByTypeAndId, weekdayKey, onEdit, onDele
           {item.buffer ? ` · +${item.buffer} min buffer` : ''}
         </p>
         {item.notes && <p className="planning-item__notes">{item.notes}</p>}
+        {cost.estimated && (
+          <p className="planning-item__cost">Est. {cost.currency || ''} {cost.amount.toLocaleString(undefined, { maximumFractionDigits: 0 })}{cost.overridden ? ' (overridden)' : ''}</p>
+        )}
+        {!cost.estimated && isCostBearingType && (
+          <p className="planning-item__cost planning-item__cost--unknown">Cost not estimated</p>
+        )}
         {findings.openingHours && (
           <p className={`planning-item__finding planning-item__finding--${findings.openingHours.level}`}>
             {findings.openingHours.level === 'critical' ? '⚠️ ' : ''}{findings.openingHours.message}
@@ -616,7 +838,7 @@ function OptionGroupForm({ planningId, dayNumber, onClose, onSaved }) {
 // timelineItems.js); rank/selected that matter in this chunk belong to
 // Item Alternatives, managed below via ItemAlternativesPanel, shown
 // only once an item is saved (an alternative needs a parent item id).
-function TimelineItemForm({ planningId, destinationId, dayNumber, partLabel, optionGroupId, optionLabel, record, referencedRecord, researchByTypeAndId, onClose, onSaved }) {
+function TimelineItemForm({ planningId, destinationId, dayNumber, partLabel, optionGroupId, optionLabel, record, referencedRecord, researchByTypeAndId, travellerAges, currencyOptions, onClose, onSaved }) {
   const base = record || {};
   const [itemType, setItemType] = useState(base.itemType || 'custom');
   const [researchRef, setResearchRef] = useState(
@@ -629,22 +851,52 @@ function TimelineItemForm({ planningId, destinationId, dayNumber, partLabel, opt
   const [buffer, setBuffer] = useState(base.buffer ?? '');
   const [notes, setNotes] = useState(base.notes || '');
   const [status, setStatus] = useState(base.status || 'planned');
+  const [costSelections, setCostSelections] = useState(base.costSelections || null);
+  const [checkOutDayNumber, setCheckOutDayNumber] = useState(base.checkOutDayNumber ?? null);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
+  // The Research record for cost editing follows whatever is CURRENTLY
+  // attached in this form (so picking a different Research item
+  // immediately shows its own fee bands/prices), not just the record
+  // the item was originally saved with.
+  const currentRecord = researchRef ? (researchByTypeAndId?.[researchRef.researchRefType]?.[researchRef.researchRefId] || null) : null;
+
   function handlePicked(picked) {
+    // Selections are specific to the Research record they were made
+    // against (fee band ids, extra-charge labels) — a different record
+    // has different bands, so carrying the old selections over would
+    // just leave them dangling. Only reset when the referenced record
+    // actually changes; re-picking the same one keeps its selections.
+    // checkOutDayNumber is reset alongside costSelections whenever the
+    // record itself changes to a different one, or to a non-
+    // accommodation type, for the same reason — a stay-range only
+    // means something in the context of a specific accommodation item.
+    if (picked.researchRefId !== researchRef?.researchRefId) {
+      setCostSelections(null);
+      if (picked.researchRefType !== 'accommodations') setCheckOutDayNumber(null);
+    }
     setResearchRef(picked);
     setPickerOpen(false);
   }
 
   function clearResearchRef() {
     setResearchRef(null);
+    setCostSelections(null);
+    setCheckOutDayNumber(null);
   }
 
   async function handleSubmit(e) {
     e.preventDefault();
     setError('');
     if (!researchRef && !title.trim()) { setError('Give this item a title, or attach it to a Research record.'); return; }
+    // Same rule timelineItems.js's own store-level validation enforces
+    // — checked here too so the person gets an inline error next to
+    // the field, rather than only a generic thrown-error alert.
+    if (checkOutDayNumber !== null && checkOutDayNumber <= dayNumber) {
+      setError('Check-out day must be a later day than check-in.');
+      return;
+    }
     setSubmitting(true);
     try {
       const fields = {
@@ -657,6 +909,8 @@ function TimelineItemForm({ planningId, destinationId, dayNumber, partLabel, opt
         buffer: buffer === '' ? null : Number(buffer),
         notes,
         status,
+        costSelections,
+        checkOutDayNumber: researchRef?.researchRefType === 'accommodations' ? checkOutDayNumber : null,
       };
       if (!record && optionGroupId) {
         // Only set when creating a NEW item directly into an Option —
@@ -721,6 +975,18 @@ function TimelineItemForm({ planningId, destinationId, dayNumber, partLabel, opt
           <option value="optional">Optional</option>
         </Select>
 
+        <CostFields
+          researchRefType={researchRef?.researchRefType || null}
+          record={currentRecord}
+          costSelections={costSelections}
+          onChange={setCostSelections}
+          travellerAges={travellerAges || []}
+          dayNumber={dayNumber}
+          checkOutDayNumber={checkOutDayNumber}
+          onCheckOutDayNumberChange={setCheckOutDayNumber}
+          currencyOptions={currencyOptions}
+        />
+
         {error && <p className="form-error" role="alert">{error}</p>}
         <Button type="submit" fullWidth disabled={submitting}>{submitting ? 'Saving…' : 'Save'}</Button>
       </form>
@@ -731,8 +997,192 @@ function TimelineItemForm({ planningId, destinationId, dayNumber, partLabel, opt
         </Modal>
       )}
 
-      {record && <ItemAlternativesPanel timelineItemId={record.id} destinationId={destinationId} researchByTypeAndId={researchByTypeAndId || {}} />}
+      {record && (
+        <ItemAlternativesPanel
+          timelineItemId={record.id}
+          destinationId={destinationId}
+          researchByTypeAndId={researchByTypeAndId || {}}
+          travellerAges={travellerAges || []}
+          currencyOptions={currencyOptions}
+          // An alternative has no check-in/check-out days of its own —
+          // an alternative accommodation choice is understood to be
+          // for the SAME stay as its parent item, so it reuses the
+          // parent's already-computed nights rather than needing its
+          // own day-range concept (which itemAlternatives.js's data
+          // model deliberately doesn't have — see the design note in
+          // ItemAlternativesPanel below).
+          parentNights={record.researchRefType === 'accommodations' ? nightsForAccommodationItem(record) : undefined}
+        />
+      )}
     </Modal>
+  );
+}
+
+// Per-item cost editing — the estimate/override relevant to whichever
+// category this item belongs to, per the approved cost design.
+// Deliberately different controls per researchRefType, since each
+// category's cost model is genuinely different (explicit fee-band
+// selection for Attractions vs. a simple override for
+// Restaurants/Transport vs. nightly-rate + extra charges for
+// Accommodation) — this mirrors calculateItemCost's own dispatch in
+// lib/planningCosts.js rather than trying to force one generic form.
+// A custom/other item (no Research reference at all) still gets the
+// plain override field, since it's the only possible cost source for
+// it (see calculateCustomItemCost).
+function CostFields({ researchRefType, record, costSelections, onChange, travellerAges, dayNumber, checkOutDayNumber, onCheckOutDayNumberChange, currencyOptions, fixedNights }) {
+  const selections = costSelections || {};
+
+  function update(patch) {
+    onChange({ ...selections, ...patch });
+  }
+
+  if (researchRefType === 'attractions') {
+    if (!record) return null; // Research record not yet resolved/available — nothing to select fee bands from
+    const selectedIds = selections.selectedFeeBandIds || [];
+    const meaningfulBands = (record.feeBands || []).filter(b => !isFeeBandEmpty(b));
+    const preview = calculateAttractionCost({ costSelections: selections, attraction: record, travellerAges });
+    return (
+      <div className="cost-fields">
+        <h3>Cost estimate</h3>
+        {meaningfulBands.length === 0 ? (
+          <p className="cost-fields__not-estimated">This attraction has no fee information in Research yet.</p>
+        ) : (
+          <>
+            <p className="cost-fields__reference">Choose which charges apply to your travellers:</p>
+            {meaningfulBands.map(band => (
+              <div key={band.id} className="cost-fields__fee-band">
+                <Checkbox
+                  label={`${band.label || 'Fee'} — ${formatSingleFeeBandAmount(band)}${band.minAge || band.maxAge ? ` (age ${band.minAge || '0'}–${band.maxAge || '∞'})` : ''}`}
+                  checked={selectedIds.includes(band.id)}
+                  onChange={() => update({ selectedFeeBandIds: selectedIds.includes(band.id) ? selectedIds.filter(id => id !== band.id) : [...selectedIds, band.id] })}
+                />
+              </div>
+            ))}
+            {preview.estimated ? (
+              <p className="cost-fields__estimate">Estimated: {preview.currency} {preview.amount.toLocaleString(undefined, { maximumFractionDigits: 0 })}</p>
+            ) : (
+              <p className="cost-fields__not-estimated">Not estimated — select at least one applicable charge.</p>
+            )}
+          </>
+        )}
+      </div>
+    );
+  }
+
+  if (researchRefType === 'restaurants' || researchRefType === 'transport') {
+    const researchPrice = record?.price;
+    const preview = researchRefType === 'restaurants'
+      ? calculateRestaurantCost({ costSelections: selections, restaurant: record })
+      : calculateTransportCost({ costSelections: selections, transport: record });
+    return (
+      <div className="cost-fields">
+        <h3>Cost estimate</h3>
+        {researchPrice && formatMoney(researchPrice) && (
+          <p className="cost-fields__reference">Research reference price: {formatMoney(researchPrice)}</p>
+        )}
+        <MoneyField
+          label="Planning estimate (optional override)"
+          value={selections.estimateOverride}
+          onChange={(value) => update({ estimateOverride: value })}
+          currencies={currencyOptions}
+          defaultCurrency={researchPrice?.currency}
+        />
+        {preview.estimated ? (
+          <p className="cost-fields__estimate">Estimated: {preview.currency} {preview.amount.toLocaleString(undefined, { maximumFractionDigits: 0 })}{preview.overridden ? ' (overridden)' : ''}</p>
+        ) : (
+          <p className="cost-fields__not-estimated">Not estimated — no Research price and no override entered.</p>
+        )}
+      </div>
+    );
+  }
+
+  if (researchRefType === 'accommodations') {
+    const selectedCharges = selections.selectedExtraChargeLabels || [];
+    // fixedNights (used by an item alternative — see ItemAlternativeForm)
+    // skips the check-in/check-out day inputs entirely: an alternative
+    // accommodation choice is for the same stay as its parent timeline
+    // item, so it has no day-range of its own to edit.
+    const previewNights = fixedNights !== undefined ? fixedNights : nightsForAccommodationItem({ dayNumber, checkOutDayNumber });
+    const preview = calculateAccommodationCost({ costSelections: selections, accommodation: record, nights: previewNights });
+    const checkOutError = fixedNights === undefined && checkOutDayNumber !== null && checkOutDayNumber !== '' && Number(checkOutDayNumber) <= dayNumber;
+    return (
+      <div className="cost-fields">
+        <h3>Cost estimate</h3>
+        {record?.price && formatMoney(record.price) && (
+          <p className="cost-fields__reference">Research nightly rate: {formatMoney(record.price)}</p>
+        )}
+        {fixedNights !== undefined ? (
+          <p className="cost-fields__reference">
+            {fixedNights ? `${fixedNights} night${fixedNights === 1 ? '' : 's'} (same stay as the main item)` : 'Nights unknown — set a check-out day on the main item first.'}
+          </p>
+        ) : (
+          <>
+            <div className="planning-form__dates">
+              <Input label="Check-in day" type="number" value={dayNumber} disabled hint="This item's own day — set by where it's placed on the itinerary." />
+              <Input
+                label="Check-out day"
+                type="number"
+                min={dayNumber + 1}
+                value={checkOutDayNumber ?? ''}
+                onChange={e => onCheckOutDayNumberChange(e.target.value === '' ? null : Number(e.target.value))}
+                hint="The Planning day number this stay ends on."
+              />
+            </div>
+            {checkOutError && <p className="form-error" role="alert">Check-out day must be a later day than check-in.</p>}
+          </>
+        )}
+        {(record?.extraPersonCharges || []).length > 0 && (
+          <div className="field">
+            <span className="field__label">Extra-person charges</span>
+            {record.extraPersonCharges.map(charge => (
+              <Checkbox
+                key={charge.label}
+                label={`${charge.label} — ${formatMoney(charge.price) || 'no amount set'}`}
+                checked={selectedCharges.includes(charge.label)}
+                onChange={() => update({ selectedExtraChargeLabels: selectedCharges.includes(charge.label) ? selectedCharges.filter(l => l !== charge.label) : [...selectedCharges, charge.label] })}
+              />
+            ))}
+          </div>
+        )}
+        <MoneyField
+          label="Planning estimate (optional override — replaces the calculation above entirely)"
+          value={selections.estimateOverride}
+          onChange={(value) => update({ estimateOverride: value })}
+          currencies={currencyOptions}
+          defaultCurrency={record?.price?.currency}
+        />
+        {preview.estimated ? (
+          <p className="cost-fields__estimate">Estimated: {preview.currency} {preview.amount.toLocaleString(undefined, { maximumFractionDigits: 0 })}{preview.overridden ? ' (overridden)' : ''}</p>
+        ) : (
+          <p className="cost-fields__not-estimated">
+            {fixedNights !== undefined
+              ? 'Not estimated — enter an override, or make sure Research has a nightly rate and the main item has a check-out day set.'
+              : 'Not estimated — set a check-out day (or enter an override), and make sure Research has a nightly rate.'}
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  // Custom/other item — the only possible source of a cost is a
+  // Planning-entered override; Shopping-type items land here too
+  // (Shopping is never one of TIMELINE_RESEARCH_REF_TYPES), matching
+  // the requirement that Shopping never auto-contributes and only
+  // counts if the person explicitly enters an estimate.
+  const preview = calculateCustomItemCost({ costSelections: selections });
+  return (
+    <div className="cost-fields">
+      <h3>Cost estimate (optional)</h3>
+      <MoneyField
+        label="Planning estimate"
+        value={selections.estimateOverride}
+        onChange={(value) => update({ estimateOverride: value })}
+        currencies={currencyOptions}
+      />
+      {preview.estimated && (
+        <p className="cost-fields__estimate">Estimated: {preview.currency} {preview.amount.toLocaleString(undefined, { maximumFractionDigits: 0 })}</p>
+      )}
+    </div>
   );
 }
 
@@ -748,8 +1198,9 @@ function TimelineItemForm({ planningId, destinationId, dayNumber, partLabel, opt
 // Option context (see the design note atop itemAlternatives.js): an
 // alternative under an item that belongs to a currently-unselected
 // Option is not itself "included" any more than its parent item is.
-function ItemAlternativesPanel({ timelineItemId, destinationId, researchByTypeAndId }) {
+function ItemAlternativesPanel({ timelineItemId, destinationId, researchByTypeAndId, travellerAges, currencyOptions, parentNights }) {
   const [adding, setAdding] = useState(false);
+  const [editingAlt, setEditingAlt] = useState(null);
 
   const fetcher = useCallback(() => listAlternativesForItem(timelineItemId), [timelineItemId]);
   const { data: alternatives, refresh } = useCachedQuery(`item-alternatives:${timelineItemId}`, fetcher);
@@ -783,12 +1234,30 @@ function ItemAlternativesPanel({ timelineItemId, destinationId, researchByTypeAn
           {alternatives.map(alt => {
             const referencedRecord = alt.researchRefType ? researchByTypeAndId[alt.researchRefType]?.[alt.researchRefId] : null;
             const label = alt.researchRefId ? describeReferencedRecord(alt.researchRefType, referencedRecord) : alt.title;
+            // Reuses the exact same per-item cost dispatch a timeline
+            // item's own row uses (calculateItemCost) — an alternative
+            // has the same researchRefType/costSelections shape as a
+            // timeline item, so the same calculation rules apply with
+            // no duplication. This is a display-only preview: whether
+            // this estimate actually COUNTS toward the Planning total
+            // is decided separately by inclusion context (selected +
+            // parent currently included), computed in the cost
+            // summary — showing it here doesn't imply it's included.
+            const cost = calculateItemCost(alt, { record: referencedRecord, travellerAges, nights: parentNights });
             return (
               <li key={alt.id} className={`item-alternatives__item${alt.selected ? ' item-alternatives__item--selected' : ''}`}>
-                <button type="button" className="item-alternatives__select" onClick={() => handleSelect(alt)}>
-                  {alt.selected ? '✓ ' : ''}{label}{alt.rank ? ` (rank ${alt.rank})` : ''}
-                </button>
-                <button type="button" className="entry-card__delete" onClick={() => handleDelete(alt)}>Delete</button>
+                <div className="item-alternatives__main">
+                  <button type="button" className="item-alternatives__select" onClick={() => handleSelect(alt)}>
+                    {alt.selected ? '✓ ' : ''}{label}{alt.rank ? ` (rank ${alt.rank})` : ''}
+                  </button>
+                  {cost.estimated && (
+                    <span className="item-alternatives__cost">Est. {cost.currency || ''} {cost.amount.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                  )}
+                </div>
+                <div className="item-alternatives__actions">
+                  <button type="button" className="item-alternatives__edit" onClick={() => setEditingAlt(alt)}>Edit</button>
+                  <button type="button" className="entry-card__delete" onClick={() => handleDelete(alt)}>Delete</button>
+                </div>
               </li>
             );
           })}
@@ -798,22 +1267,65 @@ function ItemAlternativesPanel({ timelineItemId, destinationId, researchByTypeAn
         <ItemAlternativeForm
           timelineItemId={timelineItemId}
           destinationId={destinationId}
+          researchByTypeAndId={researchByTypeAndId}
+          travellerAges={travellerAges}
+          currencyOptions={currencyOptions}
+          parentNights={parentNights}
           onClose={() => setAdding(false)}
           onSaved={() => { setAdding(false); refresh(); }}
+        />
+      )}
+      {editingAlt && (
+        <ItemAlternativeForm
+          timelineItemId={timelineItemId}
+          destinationId={destinationId}
+          record={editingAlt}
+          researchByTypeAndId={researchByTypeAndId}
+          travellerAges={travellerAges}
+          currencyOptions={currencyOptions}
+          parentNights={parentNights}
+          onClose={() => setEditingAlt(null)}
+          onSaved={() => { setEditingAlt(null); refresh(); }}
         />
       )}
     </div>
   );
 }
 
-function ItemAlternativeForm({ timelineItemId, destinationId, onClose, onSaved }) {
-  const [researchRef, setResearchRef] = useState(null);
+// Add/edit form for one item alternative. Mirrors TimelineItemForm's
+// own shape closely on purpose (Research-or-title content, plus
+// CostFields for the cost estimate) since an alternative IS, for cost
+// purposes, the same kind of thing as a timeline item — same
+// researchRefType values, same costSelections shape, same
+// calculateItemCost dispatch. rank/selected (Chunk 3) remain editable
+// here as before; cost fields are the only genuinely new part.
+function ItemAlternativeForm({ timelineItemId, destinationId, record, researchByTypeAndId, travellerAges, currencyOptions, parentNights, onClose, onSaved }) {
+  const base = record || {};
+  const [researchRef, setResearchRef] = useState(
+    base.researchRefId
+      ? { researchRefType: base.researchRefType, researchRefId: base.researchRefId, label: describeReferencedRecord(base.researchRefType, researchByTypeAndId?.[base.researchRefType]?.[base.researchRefId]) }
+      : null,
+  );
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [title, setTitle] = useState('');
-  const [notes, setNotes] = useState('');
-  const [rank, setRank] = useState('');
+  const [title, setTitle] = useState(base.title || '');
+  const [notes, setNotes] = useState(base.notes || '');
+  const [rank, setRank] = useState(base.rank ?? '');
+  const [costSelections, setCostSelections] = useState(base.costSelections || null);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  const currentRecord = researchRef ? (researchByTypeAndId?.[researchRef.researchRefType]?.[researchRef.researchRefId] || null) : null;
+
+  function handlePicked(picked) {
+    if (picked.researchRefId !== researchRef?.researchRefId) setCostSelections(null);
+    setResearchRef(picked);
+    setPickerOpen(false);
+  }
+
+  function clearResearchRef() {
+    setResearchRef(null);
+    setCostSelections(null);
+  }
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -821,13 +1333,16 @@ function ItemAlternativeForm({ timelineItemId, destinationId, onClose, onSaved }
     if (!researchRef && !title.trim()) { setError('Give this alternative a title, or attach it to a Research record.'); return; }
     setSubmitting(true);
     try {
-      await createItemAlternative(timelineItemId, {
+      const fields = {
         researchRefType: researchRef?.researchRefType || null,
         researchRefId: researchRef?.researchRefId || null,
         title: researchRef ? '' : title.trim(),
         notes,
         rank: rank === '' ? null : Number(rank),
-      });
+        costSelections,
+      };
+      if (record) await updateItemAlternative(record.id, fields);
+      else await createItemAlternative(timelineItemId, fields);
       onSaved();
     } catch (err) {
       setError(err.message);
@@ -837,14 +1352,14 @@ function ItemAlternativeForm({ timelineItemId, destinationId, onClose, onSaved }
   }
 
   return (
-    <Modal open onClose={onClose} title="New alternative">
+    <Modal open onClose={onClose} title={record ? 'Edit alternative' : 'New alternative'}>
       <form onSubmit={handleSubmit}>
         <div className="field">
           <span className="field__label">Content</span>
           {researchRef ? (
             <div className="timeline-item-form__ref">
               <span className="timeline-item-form__ref-label">{researchRef.label}</span>
-              <button type="button" className="entry-card__delete" onClick={() => setResearchRef(null)}>Remove</button>
+              <button type="button" className="entry-card__delete" onClick={clearResearchRef}>Remove</button>
             </div>
           ) : (
             <>
@@ -855,12 +1370,33 @@ function ItemAlternativeForm({ timelineItemId, destinationId, onClose, onSaved }
         </div>
         <Input label="Rank (optional)" type="number" min="1" value={rank} onChange={e => setRank(e.target.value)} />
         <TextArea label="Notes" value={notes} onChange={e => setNotes(e.target.value)} rows={2} />
+
+        {/* Reuses the exact same CostFields component a timeline item
+            uses — no duplicated fee-band/override logic. An
+            alternative has no check-in/check-out days of its own (see
+            the design note where this form is opened, above) — an
+            accommodation alternative is a different choice of PLACE
+            for the same stay as its parent item, so its nights count
+            is simply the parent's already-computed nights
+            (parentNights), passed straight through as a fixed value
+            rather than letting CostFields render its own check-in/
+            check-out day inputs. */}
+        <CostFields
+          researchRefType={researchRef?.researchRefType || null}
+          record={currentRecord}
+          costSelections={costSelections}
+          onChange={setCostSelections}
+          travellerAges={travellerAges || []}
+          fixedNights={parentNights}
+          currencyOptions={currencyOptions}
+        />
+
         {error && <p className="form-error" role="alert">{error}</p>}
         <Button type="submit" fullWidth disabled={submitting}>{submitting ? 'Saving…' : 'Save'}</Button>
       </form>
       {pickerOpen && (
         <Modal open onClose={() => setPickerOpen(false)} title="Attach a Research item">
-          <ResearchPicker destinationId={destinationId} onSelect={(picked) => { setResearchRef(picked); setPickerOpen(false); }} />
+          <ResearchPicker destinationId={destinationId} onSelect={handlePicked} />
         </Modal>
       )}
     </Modal>

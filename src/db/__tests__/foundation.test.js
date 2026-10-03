@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { __resetDbForTest } from '../connection.js';
 import { createDestination, deleteDestination, getDestination } from '../stores/destinations.js';
 import { createAttraction, listAttractions, updateAttraction, deleteAttraction, getAttraction, normalizeAttraction } from '../stores/attractions.js';
-import { createRestaurantEntry, isPlaceBased, updateRestaurantEntry } from '../stores/restaurants.js';
+import { createRestaurantEntry, getRestaurantEntry, isPlaceBased, updateRestaurantEntry } from '../stores/restaurants.js';
 import { createTransportEntry, listTransportEntries } from '../stores/transport.js';
 import { createCostEntry, getCostEntry } from '../stores/costs.js';
 import { createIntake, getIntake, updateCandidate, acceptCandidate, rejectCandidate, resetCandidateToPending } from '../stores/intake.js';
@@ -37,6 +37,12 @@ import { createTimelineItem, listTimelineItems, getTimelineItem, updateTimelineI
 import { createOptionGroup, listOptionGroupsForPlanning, getOptionGroup, selectOption, deleteOptionGroup } from '../stores/planningOptionGroups.js';
 import { createItemAlternative, listAlternativesForItem, getItemAlternative, updateItemAlternative, deleteItemAlternative } from '../stores/itemAlternatives.js';
 import { weekdayKeyForDate, checkOpeningHours, checkDuration, checkBestTime, validateTimelineItem } from '../../lib/planningValidation.js';
+import { getHomeCurrency, setHomeCurrency } from '../appSettings.js';
+import {
+  isTimelineItemCurrentlyIncluded, isAlternativeCurrentlyIncluded, ageAsOf, ageQualifiesForBand,
+  calculateAttractionCost, calculateRestaurantCost, calculateTransportCost, calculateAccommodationCost, calculateCustomItemCost,
+  nightsForAccommodationItem, calculateItemCost, costCategoryForItem, calculatePlanningCostBreakdown, convertTotalToHomeCurrency, COST_CATEGORIES,
+} from '../../lib/planningCosts.js';
 
 let passed = 0, failed = 0;
 async function test(name, fn) {
@@ -2978,6 +2984,768 @@ await test('a pre-Chunk-4 restaurant/transport record with no typicalDurationMin
   assert.equal(legacyTransport.typicalDurationMin, null);
   assert.equal(legacyTransport.typicalDurationMax, null);
   assert.equal(checkDuration({ item: { plannedDuration: 100 }, record: legacyTransport }), null);
+});
+
+console.log('\n39. Planning costs: traveller age and fee-band qualification (Tour Planning cost chunk)');
+await test('ageAsOf computes whole-year age as of the Planning start date, respecting whether the birthday has occurred yet', async () => {
+  assert.equal(ageAsOf('2015-06-15', '2026-01-10'), 10, 'birthday later in the year -> still 10');
+  assert.equal(ageAsOf('2015-06-15', '2026-06-14'), 10, 'the day before the birthday');
+  assert.equal(ageAsOf('2015-06-15', '2026-06-15'), 11, 'on the birthday itself');
+  assert.equal(ageAsOf('1990-12-31', '2026-01-01'), 35);
+  assert.equal(ageAsOf('', '2026-01-01'), null, 'no DOB -> no age, never a guess');
+  assert.equal(ageAsOf('2030-01-01', '2026-01-01'), null, 'a DOB after the reference date is not a valid age');
+});
+
+await test('ageQualifiesForBand treats blank bounds as unbounded, not zero', async () => {
+  assert.equal(ageQualifiesForBand(8, { minAge: '', maxAge: '12' }), true);
+  assert.equal(ageQualifiesForBand(13, { minAge: '', maxAge: '12' }), false);
+  assert.equal(ageQualifiesForBand(13, { minAge: '13', maxAge: '' }), true);
+  assert.equal(ageQualifiesForBand(12, { minAge: '13', maxAge: '' }), false);
+  assert.equal(ageQualifiesForBand(40, { minAge: '', maxAge: '' }), true, 'a band with no age limits applies to everyone');
+  assert.equal(ageQualifiesForBand(null, { minAge: '', maxAge: '' }), false, 'an unknown age never qualifies');
+});
+
+console.log('\n40. Planning costs: attractions (selected fee bands, age-gated)');
+const sampleAttraction = {
+  feeBands: [
+    { id: 'adult', label: 'Adult', minAge: '13', maxAge: '', status: 'paid', amount: '500', currency: 'INR' },
+    { id: 'child', label: 'Child', minAge: '', maxAge: '12', status: 'paid', amount: '250', currency: 'INR' },
+    { id: 'free-under-5', label: 'Under 5', minAge: '', maxAge: '4', status: 'free', amount: '', currency: 'INR' },
+  ],
+};
+await test('attraction cost sums only the SELECTED fee bands, each once per age-qualifying traveller', async () => {
+  const both = calculateAttractionCost({ costSelections: { selectedFeeBandIds: ['adult', 'child'] }, attraction: sampleAttraction, travellerAges: [35, 33, 8] });
+  assert.equal(both.estimated, true);
+  assert.equal(both.amount, 500 * 2 + 250 * 1, 'two adults at 500 + one child at 250');
+  assert.equal(both.currency, 'INR');
+
+  const adultOnly = calculateAttractionCost({ costSelections: { selectedFeeBandIds: ['adult'] }, attraction: sampleAttraction, travellerAges: [35, 33, 8] });
+  assert.equal(adultOnly.amount, 1000, 'an unselected band (child) is never added automatically, even though a child is travelling');
+});
+
+await test('an attraction with no fee band selected is NOT estimated — never silently zero, never auto-guessed', async () => {
+  const none = calculateAttractionCost({ costSelections: null, attraction: sampleAttraction, travellerAges: [35] });
+  assert.equal(none.estimated, false);
+  assert.equal(none.amount, null, 'null, not 0 — "not estimated" must be distinguishable from "free"');
+  const emptySelection = calculateAttractionCost({ costSelections: { selectedFeeBandIds: [] }, attraction: sampleAttraction, travellerAges: [35] });
+  assert.equal(emptySelection.estimated, false);
+});
+
+await test('a selected band marked FREE is estimated at zero — distinct from not-estimated', async () => {
+  const free = calculateAttractionCost({ costSelections: { selectedFeeBandIds: ['free-under-5'] }, attraction: sampleAttraction, travellerAges: [3] });
+  assert.equal(free.estimated, true, 'a free attraction IS estimated (at zero)');
+  assert.equal(free.amount, 0);
+});
+
+await test('a selected band that no traveller qualifies for contributes nothing and leaves the item not-estimated', async () => {
+  const noOneQualifies = calculateAttractionCost({ costSelections: { selectedFeeBandIds: ['child'] }, attraction: sampleAttraction, travellerAges: [35, 40] });
+  assert.equal(noOneQualifies.estimated, false, 'no child is travelling, so the child band applies to nobody');
+});
+
+await test('a dangling selected fee band id (Research band since removed) is skipped safely and preserved in costSelections', async () => {
+  const selections = { selectedFeeBandIds: ['adult', 'band-that-was-deleted'] };
+  const result = calculateAttractionCost({ costSelections: selections, attraction: sampleAttraction, travellerAges: [35] });
+  assert.equal(result.amount, 500, 'the dangling id contributes nothing; the valid one still counts');
+  assert.deepEqual(selections.selectedFeeBandIds, ['adult', 'band-that-was-deleted'], 'calculation never mutates or prunes the stored selection');
+});
+
+await test('camera/videography charges are never included automatically in an attraction estimate', async () => {
+  const withExtras = { ...sampleAttraction, cameraCharge: { amount: '100', currency: 'INR' }, videographyCharge: { amount: '500', currency: 'INR' } };
+  const result = calculateAttractionCost({ costSelections: { selectedFeeBandIds: ['adult'] }, attraction: withExtras, travellerAges: [35] });
+  assert.equal(result.amount, 500, 'only the selected fee band — camera/video are not added');
+});
+
+await test('costSelections round-trips through the real timelineItems store, including a dangling id', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const attraction = await createAttraction(dest.id, { place: { name: 'Sigiriya' }, feeBands: sampleAttraction.feeBands });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-12' });
+  const item = await createTimelineItem(planning.id, 1, {
+    itemType: 'attraction', researchRefType: 'attractions', researchRefId: attraction.id,
+    costSelections: { selectedFeeBandIds: ['adult', 'child'] },
+  });
+  assert.deepEqual(item.costSelections, { selectedFeeBandIds: ['adult', 'child'] });
+
+  // Research later drops the 'child' band — the stored selection must not be rewritten.
+  await updateAttraction(attraction.id, { feeBands: [sampleAttraction.feeBands[0]] });
+  const reloaded = await getTimelineItem(item.id);
+  assert.deepEqual(reloaded.costSelections.selectedFeeBandIds, ['adult', 'child'], 'the dangling id stays stored exactly as saved');
+  const fresh = await getAttraction(attraction.id);
+  const result = calculateAttractionCost({ costSelections: reloaded.costSelections, attraction: fresh, travellerAges: [35, 8] });
+  assert.equal(result.amount, 500, 'only the surviving band counts');
+});
+
+await test('a timeline item with no costSelections defaults to null (existing items are unaffected)', async () => {
+  const dest = await createDestination({ name: 'Peru' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-01', endDate: '2026-01-02' });
+  const item = await createTimelineItem(planning.id, 1, { itemType: 'custom', title: 'Free time' });
+  assert.equal(item.costSelections, null);
+});
+
+console.log('\n41. Planning costs: restaurants and transport (Research price, Planning override)');
+await test('a restaurant uses the Research reference price as the initial estimate', async () => {
+  const result = calculateRestaurantCost({ costSelections: null, restaurant: { price: { amount: '800', currency: 'INR' } } });
+  assert.equal(result.estimated, true);
+  assert.equal(result.amount, 800);
+  assert.equal(result.overridden, false);
+});
+
+await test('a Planning override REPLACES the restaurant Research price and never changes the Research record', async () => {
+  const dest = await createDestination({ name: 'Japan' });
+  const restaurant = await createRestaurantEntry(dest.id, { place: { name: 'Sushi place' }, price: { amount: '800', currency: 'INR', unit: '', note: '' } });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-04-01', endDate: '2026-04-03' });
+  const item = await createTimelineItem(planning.id, 1, {
+    itemType: 'meal', researchRefType: 'restaurants', researchRefId: restaurant.id,
+    costSelections: { estimateOverride: { amount: '1000', currency: 'INR' } },
+  });
+  const result = calculateRestaurantCost({ costSelections: item.costSelections, restaurant });
+  assert.equal(result.amount, 1000, 'the override, not 800 and not 1800');
+  assert.equal(result.overridden, true);
+
+  const researchAfter = await getRestaurantEntry(restaurant.id);
+  assert.equal(researchAfter.price.amount, '800', 'the Research record is completely untouched by a Planning override');
+});
+
+await test('transport uses the Research price, and a Planning override replaces it', async () => {
+  const transport = { price: { amount: '2000', currency: 'INR' } };
+  assert.equal(calculateTransportCost({ costSelections: null, transport }).amount, 2000);
+  const overridden = calculateTransportCost({ costSelections: { estimateOverride: { amount: '2500', currency: 'INR' } }, transport });
+  assert.equal(overridden.amount, 2500);
+  assert.equal(overridden.overridden, true);
+});
+
+await test('missing price with no override is "not estimated" — never treated as zero', async () => {
+  const noPrice = calculateRestaurantCost({ costSelections: null, restaurant: { price: { amount: '', currency: '' } } });
+  assert.equal(noPrice.estimated, false);
+  assert.equal(noPrice.amount, null);
+  assert.equal(calculateTransportCost({ costSelections: null, transport: { price: null } }).estimated, false);
+  assert.equal(calculateRestaurantCost({ costSelections: null, restaurant: null }).estimated, false);
+});
+
+await test('an explicit override of 0 is a real estimate of zero, not "not estimated"', async () => {
+  const result = calculateRestaurantCost({ costSelections: { estimateOverride: { amount: '0', currency: 'INR' } }, restaurant: { price: { amount: '800', currency: 'INR' } } });
+  assert.equal(result.estimated, true);
+  assert.equal(result.amount, 0, 'the person deliberately entered 0 (e.g. a free meal) — it must override the Research 800');
+});
+
+console.log('\n42. Planning costs: accommodation stay range (checkOutDayNumber correction — replaces the old manual-nights mechanism)');
+const sampleHotel = {
+  price: { amount: '3000', currency: 'INR' },
+  extraPersonCharges: [
+    { label: 'Extra adult', price: { amount: '1500', currency: 'INR' } },
+    { label: 'Extra child', price: { amount: '800', currency: 'INR' } },
+  ],
+};
+
+await test('nightsForAccommodationItem computes nights as checkOutDayNumber - dayNumber, with no manual-nights fallback', async () => {
+  assert.equal(nightsForAccommodationItem({ dayNumber: 2, checkOutDayNumber: 5 }), 3);
+  assert.equal(nightsForAccommodationItem({ dayNumber: 1, checkOutDayNumber: 2 }), 1);
+  assert.equal(nightsForAccommodationItem({ dayNumber: 1, checkOutDayNumber: null }), null, 'no check-out day set -> nights unknown, never guessed at 1');
+  assert.equal(nightsForAccommodationItem({ dayNumber: 1 }), null, 'checkOutDayNumber entirely absent -> unknown, same as null');
+  // The old mechanism is gone — a stray costSelections.nights value
+  // (e.g. left over from a value constructed outside this app) must
+  // have NO effect at all; only dayNumber/checkOutDayNumber matter now.
+  assert.equal(nightsForAccommodationItem({ dayNumber: 1, costSelections: { nights: 99 } }), null, 'costSelections.nights is no longer read by this function');
+});
+
+await test('invalid check-out ranges (zero, negative, same-day, before check-in) are all treated as unknown nights, never a guessed or negative value', async () => {
+  assert.equal(nightsForAccommodationItem({ dayNumber: 3, checkOutDayNumber: 3 }), null, 'same-day check-out is invalid');
+  assert.equal(nightsForAccommodationItem({ dayNumber: 3, checkOutDayNumber: 2 }), null, 'check-out before check-in is invalid');
+  assert.equal(nightsForAccommodationItem({ dayNumber: 3, checkOutDayNumber: 0 }), null);
+  assert.equal(nightsForAccommodationItem({ dayNumber: 3, checkOutDayNumber: -1 }), null);
+  assert.equal(nightsForAccommodationItem({ dayNumber: 3, checkOutDayNumber: 'not a number' }), null, 'a non-numeric value never throws, never produces NaN nights');
+});
+
+await test('createTimelineItem rejects an invalid checkOutDayNumber (zero, negative, same-day, before check-in) at write time', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const hotel = await createAccommodation(dest.id, { place: { name: 'Hotel' }, price: { amount: '3000', currency: 'INR', unit: '', note: '' } });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-20' });
+  await assert.rejects(() => createTimelineItem(planning.id, 3, { itemType: 'accommodation', researchRefType: 'accommodations', researchRefId: hotel.id, checkOutDayNumber: 3 }), /later day/i, 'same-day');
+  await assert.rejects(() => createTimelineItem(planning.id, 3, { itemType: 'accommodation', researchRefType: 'accommodations', researchRefId: hotel.id, checkOutDayNumber: 2 }), /later day/i, 'before check-in');
+  await assert.rejects(() => createTimelineItem(planning.id, 3, { itemType: 'accommodation', researchRefType: 'accommodations', researchRefId: hotel.id, checkOutDayNumber: 0 }), /later day/i, 'zero');
+  await assert.rejects(() => createTimelineItem(planning.id, 3, { itemType: 'accommodation', researchRefType: 'accommodations', researchRefId: hotel.id, checkOutDayNumber: -5 }), /later day/i, 'negative');
+  // Leaving it unset entirely is always valid.
+  const unset = await createTimelineItem(planning.id, 3, { itemType: 'accommodation', researchRefType: 'accommodations', researchRefId: hotel.id });
+  assert.equal(unset.checkOutDayNumber, null);
+});
+
+await test('updateTimelineItem re-validates checkOutDayNumber against the (possibly just-changed) dayNumber', async () => {
+  const dest = await createDestination({ name: 'Peru' });
+  const hotel = await createAccommodation(dest.id, { place: { name: 'Hotel' }, price: { amount: '1000', currency: 'INR', unit: '', note: '' } });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-01', endDate: '2026-01-20' });
+  const item = await createTimelineItem(planning.id, 2, { itemType: 'accommodation', researchRefType: 'accommodations', researchRefId: hotel.id, checkOutDayNumber: 5 });
+  await assert.rejects(() => updateTimelineItem(item.id, { checkOutDayNumber: 1 }), /later day/i, 'moving check-out before the existing check-in is rejected');
+  const updated = await updateTimelineItem(item.id, { checkOutDayNumber: 8 });
+  assert.equal(updated.checkOutDayNumber, 8);
+});
+
+await test('accommodation cost is nightly rate x (checkOutDayNumber - dayNumber), not a manually-entered count', async () => {
+  const threeNights = calculateAccommodationCost({ costSelections: null, accommodation: sampleHotel, nights: nightsForAccommodationItem({ dayNumber: 2, checkOutDayNumber: 5 }) });
+  assert.equal(threeNights.amount, 9000);
+  const oneNight = calculateAccommodationCost({ costSelections: null, accommodation: sampleHotel, nights: nightsForAccommodationItem({ dayNumber: 1, checkOutDayNumber: 2 }) });
+  assert.equal(oneNight.amount, 3000);
+});
+
+await test('accommodation with no check-out day set is NOT estimated, never defaulted to a single night', async () => {
+  const result = calculateAccommodationCost({ costSelections: null, accommodation: sampleHotel, nights: nightsForAccommodationItem({ dayNumber: 1, checkOutDayNumber: null }) });
+  assert.equal(result.estimated, false);
+  assert.equal(result.amount, null);
+});
+
+await test('only SELECTED extra-person charges are added, once per stay (not per night), and a dangling charge label is skipped safely', async () => {
+  const nights = nightsForAccommodationItem({ dayNumber: 1, checkOutDayNumber: 3 }); // 2 nights
+  const withOneExtra = calculateAccommodationCost({ costSelections: { selectedExtraChargeLabels: ['Extra adult'] }, accommodation: sampleHotel, nights });
+  assert.equal(withOneExtra.amount, 6000 + 1500, 'two nights plus ONE selected extra-adult charge — not multiplied by nights, and Extra child is not added');
+
+  const dangling = calculateAccommodationCost({ costSelections: { selectedExtraChargeLabels: ['Extra adult', 'Charge that no longer exists'] }, accommodation: sampleHotel, nights: nightsForAccommodationItem({ dayNumber: 1, checkOutDayNumber: 2 }) });
+  assert.equal(dangling.amount, 3000 + 1500, 'the dangling label contributes nothing');
+});
+
+await test('an accommodation Planning override replaces the whole calculation, including extra charges, regardless of the stay range', async () => {
+  const result = calculateAccommodationCost({
+    costSelections: { selectedExtraChargeLabels: ['Extra adult'], estimateOverride: { amount: '7500', currency: 'INR' } },
+    accommodation: sampleHotel, nights: nightsForAccommodationItem({ dayNumber: 1, checkOutDayNumber: 4 }),
+  });
+  assert.equal(result.amount, 7500);
+  assert.equal(result.overridden, true);
+  // Even with no check-out day set at all (nights null), an override still works.
+  const noNightsOverride = calculateAccommodationCost({ costSelections: { estimateOverride: { amount: '2000', currency: 'INR' } }, accommodation: sampleHotel, nights: null });
+  assert.equal(noNightsOverride.amount, 2000);
+});
+
+await test('accommodation with no nightly rate and no override is not estimated, even with a valid stay range', async () => {
+  const noRate = calculateAccommodationCost({ costSelections: null, accommodation: { price: { amount: '', currency: '' } }, nights: nightsForAccommodationItem({ dayNumber: 1, checkOutDayNumber: 3 }) });
+  assert.equal(noRate.estimated, false);
+  assert.equal(noRate.amount, null);
+});
+
+await test('room allocation is informational only and never affects the accommodation estimate', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const hotel = await createAccommodation(dest.id, { place: { name: 'Hotel' }, price: { amount: '3000', currency: 'INR', unit: '', note: '' } });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-15' });
+  const item = await createTimelineItem(planning.id, 1, {
+    itemType: 'accommodation', researchRefType: 'accommodations', researchRefId: hotel.id,
+    checkOutDayNumber: 3,
+    costSelections: { roomAllocation: [{ roomLabel: 'Room 1', travellerIds: ['a', 'b'] }, { roomLabel: 'Room 2', travellerIds: ['c'] }] },
+  });
+  const result = calculateAccommodationCost({ costSelections: item.costSelections, accommodation: hotel, nights: nightsForAccommodationItem(item) });
+  assert.equal(result.amount, 6000, 'two rooms allocated, but the estimate is still just nightly x nights — no per-room pricing logic');
+});
+
+await test('multiple accommodation stays are supported within one Planning, and each contributes its own nights independently', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const hotelA = await createAccommodation(dest.id, { place: { name: 'Hotel A' }, price: { amount: '3000', currency: 'INR', unit: '', note: '' } });
+  const hotelB = await createAccommodation(dest.id, { place: { name: 'Hotel B' }, price: { amount: '2000', currency: 'INR', unit: '', note: '' } });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-20' });
+  const stayA = await createTimelineItem(planning.id, 1, { itemType: 'accommodation', researchRefType: 'accommodations', researchRefId: hotelA.id, checkOutDayNumber: 4 }); // 3 nights
+  const stayB = await createTimelineItem(planning.id, 4, { itemType: 'accommodation', researchRefType: 'accommodations', researchRefId: hotelB.id, checkOutDayNumber: 9 }); // 5 nights
+
+  const records = { [hotelA.id]: hotelA, [hotelB.id]: hotelB };
+  const breakdown = calculatePlanningCostBreakdown({
+    items: [stayA, stayB], alternatives: [], optionGroupsById: {}, travellerAges: [],
+    getRecordForItem: (item) => records[item.researchRefId],
+  });
+  assert.equal(breakdown.categoryTotals.accommodation.INR, 3000 * 3 + 2000 * 5, 'both stays sum correctly, each with its own independently-computed nights');
+});
+
+await test('a Planning startDate shift does not change a stay\'s nights — checkOutDayNumber/dayNumber are day-number based, same as every other date-shift-safe fact in this app', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const hotel = await createAccommodation(dest.id, { place: { name: 'Hotel' }, price: { amount: '3000', currency: 'INR', unit: '', note: '' } });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-20' });
+  const item = await createTimelineItem(planning.id, 2, { itemType: 'accommodation', researchRefType: 'accommodations', researchRefId: hotel.id, checkOutDayNumber: 5 });
+  assert.equal(nightsForAccommodationItem(item), 3);
+
+  const shifted = await updatePlanning(planning.id, { startDate: '2026-03-01', endDate: '2026-03-11' });
+  const stillThere = await getTimelineItem(item.id);
+  assert.equal(stillThere.dayNumber, 2, 'check-in day number unchanged by the shift');
+  assert.equal(stillThere.checkOutDayNumber, 5, 'check-out day number unchanged by the shift');
+  assert.equal(nightsForAccommodationItem(stillThere), 3, 'nights is unaffected — it was never calendar-date based');
+
+  // The calendar DATES those day numbers map to have moved, exactly
+  // like every other derived-day fact — but that's a separate concern
+  // from nights, which this correction never ties to calendar dates.
+  const days = listPlanningDays(shifted);
+  assert.equal(days[0].date, '2026-03-01', 'calendar date mapping did shift, as expected, independent of nights');
+});
+
+console.log('\n43. Planning costs: custom/other items and Shopping');
+await test('a custom item has no cost unless the person enters a Planning estimate', async () => {
+  assert.equal(calculateCustomItemCost({ costSelections: null }).estimated, false);
+  const entered = calculateCustomItemCost({ costSelections: { estimateOverride: { amount: '300', currency: 'INR' } } });
+  assert.equal(entered.estimated, true);
+  assert.equal(entered.amount, 300);
+});
+
+await test('a shopping-style custom item never contributes to the total unless a Planning estimate is explicitly entered', async () => {
+  const items = [
+    { id: 'shop-1', itemType: 'custom', researchRefType: null, researchRefId: null, title: 'Buy souvenirs', costSelections: null },
+    { id: 'shop-2', itemType: 'custom', researchRefType: null, researchRefId: null, title: 'Buy tea', costSelections: { estimateOverride: { amount: '2000', currency: 'INR' } } },
+  ];
+  const breakdown = calculatePlanningCostBreakdown({ items, alternatives: [], optionGroupsById: {}, getRecordForItem: () => null, travellerAges: [] });
+  assert.equal(breakdown.categoryTotals.other.INR, 2000, 'only the item with an explicit estimate counts');
+  assert.equal(breakdown.unestimatedItems.length, 1, 'the un-priced shopping item is listed as not estimated, not silently zero');
+});
+
+console.log('\n44. Planning costs: category routing');
+await test('costCategoryForItem routes by Research type, falling back to itemType for custom items', async () => {
+  assert.equal(costCategoryForItem({ researchRefType: 'attractions' }), 'attractions');
+  assert.equal(costCategoryForItem({ researchRefType: 'restaurants' }), 'food');
+  assert.equal(costCategoryForItem({ researchRefType: 'transport' }), 'transport');
+  assert.equal(costCategoryForItem({ researchRefType: 'accommodations' }), 'accommodation');
+  assert.equal(costCategoryForItem({ researchRefType: null, itemType: 'meal' }), 'food');
+  assert.equal(costCategoryForItem({ researchRefType: null, itemType: 'travel' }), 'transport');
+  assert.equal(costCategoryForItem({ researchRefType: null, itemType: 'accommodation' }), 'accommodation');
+  assert.equal(costCategoryForItem({ researchRefType: null, itemType: 'custom' }), 'other');
+  assert.deepEqual(COST_CATEGORIES, ['accommodation', 'transport', 'attractions', 'food', 'other']);
+});
+
+console.log('\n45. Planning costs: itinerary Option / alternative inclusion context');
+await test('an ordinary item is always included; an Option item is included only when ITS Option is the selected one', async () => {
+  const groups = { g1: { id: 'g1', selectedOptionLabel: 'A' } };
+  assert.equal(isTimelineItemCurrentlyIncluded({ optionGroupId: null }, groups), true);
+  assert.equal(isTimelineItemCurrentlyIncluded({ optionGroupId: 'g1', optionLabel: 'A' }, groups), true);
+  assert.equal(isTimelineItemCurrentlyIncluded({ optionGroupId: 'g1', optionLabel: 'B' }, groups), false);
+});
+
+await test('an UNRESOLVED (pending) Option group includes NOTHING — competing Options are never all counted', async () => {
+  const groups = { g1: { id: 'g1', selectedOptionLabel: null } };
+  assert.equal(isTimelineItemCurrentlyIncluded({ optionGroupId: 'g1', optionLabel: 'A' }, groups), false);
+  assert.equal(isTimelineItemCurrentlyIncluded({ optionGroupId: 'g1', optionLabel: 'B' }, groups), false);
+});
+
+await test('an item whose Option group no longer exists is not counted (never guessed as included)', async () => {
+  assert.equal(isTimelineItemCurrentlyIncluded({ optionGroupId: 'deleted-group', optionLabel: 'A' }, {}), false);
+});
+
+await test('only the SELECTED Option\'s costs count toward the total; the unselected Option is excluded', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-12' });
+  const group = await createOptionGroup(planning.id, { dayNumber: 1, partLabel: 'Morning' });
+  const optionA = await createTimelineItem(planning.id, 1, { itemType: 'custom', title: 'Option A activity', optionGroupId: group.id, optionLabel: 'A', costSelections: { estimateOverride: { amount: '1000', currency: 'INR' } } });
+  const optionB = await createTimelineItem(planning.id, 1, { itemType: 'custom', title: 'Option B activity', optionGroupId: group.id, optionLabel: 'B', costSelections: { estimateOverride: { amount: '5000', currency: 'INR' } } });
+  const ordinary = await createTimelineItem(planning.id, 1, { itemType: 'custom', title: 'Lunch', costSelections: { estimateOverride: { amount: '400', currency: 'INR' } } });
+  await selectOption(group.id, 'A');
+
+  const groupsById = Object.fromEntries((await listOptionGroupsForPlanning(planning.id)).map(g => [g.id, g]));
+  const items = await listTimelineItems(planning.id);
+  const breakdown = calculatePlanningCostBreakdown({ items, alternatives: [], optionGroupsById: groupsById, getRecordForItem: () => null, travellerAges: [] });
+  assert.equal(breakdown.overallByCurrency.INR, 1400, 'Option A (1000) + ordinary lunch (400); Option B\'s 5000 is NOT counted');
+  assert.ok(optionA && optionB && ordinary);
+});
+
+await test('with the Option group left PENDING, neither competing Option counts — only ordinary items', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-12' });
+  const group = await createOptionGroup(planning.id, { dayNumber: 1, partLabel: 'Morning' });
+  await createTimelineItem(planning.id, 1, { itemType: 'custom', title: 'A', optionGroupId: group.id, optionLabel: 'A', costSelections: { estimateOverride: { amount: '1000', currency: 'INR' } } });
+  await createTimelineItem(planning.id, 1, { itemType: 'custom', title: 'B', optionGroupId: group.id, optionLabel: 'B', costSelections: { estimateOverride: { amount: '5000', currency: 'INR' } } });
+  await createTimelineItem(planning.id, 1, { itemType: 'custom', title: 'Lunch', costSelections: { estimateOverride: { amount: '400', currency: 'INR' } } });
+
+  const groupsById = Object.fromEntries((await listOptionGroupsForPlanning(planning.id)).map(g => [g.id, g]));
+  const items = await listTimelineItems(planning.id);
+  const breakdown = calculatePlanningCostBreakdown({ items, alternatives: [], optionGroupsById: groupsById, getRecordForItem: () => null, travellerAges: [] });
+  assert.equal(breakdown.overallByCurrency.INR, 400, 'an unresolved choice must not double-count both competing Options');
+});
+
+await test('reselecting a different Option changes which costs count, with no stored total to go stale', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-12' });
+  const group = await createOptionGroup(planning.id, { dayNumber: 1, partLabel: 'Morning' });
+  await createTimelineItem(planning.id, 1, { itemType: 'custom', title: 'A', optionGroupId: group.id, optionLabel: 'A', costSelections: { estimateOverride: { amount: '1000', currency: 'INR' } } });
+  await createTimelineItem(planning.id, 1, { itemType: 'custom', title: 'B', optionGroupId: group.id, optionLabel: 'B', costSelections: { estimateOverride: { amount: '5000', currency: 'INR' } } });
+  const items = await listTimelineItems(planning.id);
+  const totalFor = async () => {
+    const groupsById = Object.fromEntries((await listOptionGroupsForPlanning(planning.id)).map(g => [g.id, g]));
+    return calculatePlanningCostBreakdown({ items, alternatives: [], optionGroupsById: groupsById, getRecordForItem: () => null, travellerAges: [] }).overallByCurrency.INR;
+  };
+  await selectOption(group.id, 'A');
+  assert.equal(await totalFor(), 1000);
+  await selectOption(group.id, 'B');
+  assert.equal(await totalFor(), 5000);
+  await selectOption(group.id, null);
+  assert.equal(await totalFor(), undefined, 'back to pending: nothing counts, so there is no INR total at all');
+});
+
+await test('an item alternative counts only if it is itself selected AND its parent item is currently included', async () => {
+  const groups = { g1: { id: 'g1', selectedOptionLabel: 'A' } };
+  const parentInSelectedOption = { optionGroupId: 'g1', optionLabel: 'A' };
+  const parentInUnselectedOption = { optionGroupId: 'g1', optionLabel: 'B' };
+  assert.equal(isAlternativeCurrentlyIncluded({ selected: true }, parentInSelectedOption, groups), true);
+  assert.equal(isAlternativeCurrentlyIncluded({ selected: false }, parentInSelectedOption, groups), false, 'a non-selected alternative is not double-counted alongside the chosen one');
+  assert.equal(isAlternativeCurrentlyIncluded({ selected: true }, parentInUnselectedOption, groups), false, 'a selected alternative inside an UNSELECTED Option must not count');
+});
+
+await test('rollup: selected alternative counts, unselected sibling does not, alternative under an unselected Option does not', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-12' });
+  const group = await createOptionGroup(planning.id, { dayNumber: 1, partLabel: 'Morning' });
+  const lunchInA = await createTimelineItem(planning.id, 1, { itemType: 'meal', title: 'Lunch slot (A)', optionGroupId: group.id, optionLabel: 'A' });
+  const lunchInB = await createTimelineItem(planning.id, 1, { itemType: 'meal', title: 'Lunch slot (B)', optionGroupId: group.id, optionLabel: 'B' });
+  const chosen = await createItemAlternative(lunchInA.id, { title: 'Restaurant A', selected: true, costSelections: { estimateOverride: { amount: '700', currency: 'INR' } } });
+  const sibling = await createItemAlternative(lunchInA.id, { title: 'Restaurant B', selected: false, costSelections: { estimateOverride: { amount: '900', currency: 'INR' } } });
+  const underB = await createItemAlternative(lunchInB.id, { title: 'Restaurant D', selected: true, costSelections: { estimateOverride: { amount: '3000', currency: 'INR' } } });
+  await selectOption(group.id, 'A');
+
+  const groupsById = Object.fromEntries((await listOptionGroupsForPlanning(planning.id)).map(g => [g.id, g]));
+  const items = await listTimelineItems(planning.id);
+  const alternatives = [
+    { alternative: chosen, parentItem: lunchInA },
+    { alternative: sibling, parentItem: lunchInA },
+    { alternative: underB, parentItem: lunchInB },
+  ];
+  const breakdown = calculatePlanningCostBreakdown({ items, alternatives, optionGroupsById: groupsById, getRecordForItem: () => null, travellerAges: [] });
+  assert.equal(breakdown.categoryTotals.food.INR, 700, 'only the selected alternative under the selected Option: 700 (not 900, not 3000)');
+});
+
+await test('an item whose alternatives are all unselected still counts by its own estimate — alternatives never replace or double it', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-12' });
+  const lunch = await createTimelineItem(planning.id, 1, { itemType: 'meal', title: 'Lunch', costSelections: { estimateOverride: { amount: '600', currency: 'INR' } } });
+  const alt = await createItemAlternative(lunch.id, { title: 'Backup', selected: false, costSelections: { estimateOverride: { amount: '900', currency: 'INR' } } });
+  const breakdown = calculatePlanningCostBreakdown({
+    items: [lunch], alternatives: [{ alternative: alt, parentItem: lunch }], optionGroupsById: {}, getRecordForItem: () => null, travellerAges: [],
+  });
+  assert.equal(breakdown.categoryTotals.food.INR, 600);
+});
+
+console.log('\n46. Planning costs: Planned vs Optional');
+await test('both planned and optional items count when they are in the current itinerary', async () => {
+  const items = [
+    { id: 'p', itemType: 'custom', status: 'planned', optionGroupId: null, costSelections: { estimateOverride: { amount: '1000', currency: 'INR' } } },
+    { id: 'o', itemType: 'custom', status: 'optional', optionGroupId: null, costSelections: { estimateOverride: { amount: '500', currency: 'INR' } } },
+  ];
+  const breakdown = calculatePlanningCostBreakdown({ items, alternatives: [], optionGroupsById: {}, getRecordForItem: () => null, travellerAges: [] });
+  assert.equal(breakdown.overallByCurrency.INR, 1500, 'Optional still counts — it means "may be skipped", not "not part of the estimate"');
+});
+
+await test('an Optional item inside an UNSELECTED Option is still excluded — status never overrides Option inclusion', async () => {
+  const groups = { g1: { id: 'g1', selectedOptionLabel: 'A' } };
+  const items = [{ id: 'o', itemType: 'custom', status: 'optional', optionGroupId: 'g1', optionLabel: 'B', costSelections: { estimateOverride: { amount: '500', currency: 'INR' } } }];
+  const breakdown = calculatePlanningCostBreakdown({ items, alternatives: [], optionGroupsById: groups, getRecordForItem: () => null, travellerAges: [] });
+  assert.equal(breakdown.overallByCurrency.INR, undefined);
+});
+
+console.log('\n47. Planning costs: category totals, overall total, and not-estimated tracking');
+await test('a full mixed Planning rolls up per category and overall, listing un-estimated items separately', async () => {
+  const hotel = { id: 'h', price: { amount: '3000', currency: 'INR' }, extraPersonCharges: [] };
+  const restaurant = { id: 'r', price: { amount: '800', currency: 'INR' } };
+  const transportRec = { id: 't', price: { amount: '2000', currency: 'INR' } };
+  const attraction = { id: 'a', feeBands: sampleAttraction.feeBands };
+  const noPriceRestaurant = { id: 'r2', price: { amount: '', currency: '' } };
+  const records = { h: hotel, r: restaurant, t: transportRec, a: attraction, r2: noPriceRestaurant };
+
+  const items = [
+    { id: 'i1', researchRefType: 'accommodations', researchRefId: 'h', itemType: 'accommodation', dayNumber: 1, checkOutDayNumber: 3, optionGroupId: null, costSelections: null },
+    { id: 'i2', researchRefType: 'restaurants', researchRefId: 'r', itemType: 'meal', optionGroupId: null, costSelections: null },
+    { id: 'i3', researchRefType: 'transport', researchRefId: 't', itemType: 'travel', optionGroupId: null, costSelections: { estimateOverride: { amount: '2400', currency: 'INR' } } },
+    { id: 'i4', researchRefType: 'attractions', researchRefId: 'a', itemType: 'attraction', optionGroupId: null, costSelections: { selectedFeeBandIds: ['adult', 'child'] } },
+    { id: 'i5', researchRefType: 'restaurants', researchRefId: 'r2', itemType: 'meal', optionGroupId: null, costSelections: null },
+    { id: 'i6', researchRefType: null, itemType: 'custom', optionGroupId: null, costSelections: { estimateOverride: { amount: '300', currency: 'INR' } } },
+  ];
+  const breakdown = calculatePlanningCostBreakdown({
+    items, alternatives: [], optionGroupsById: {}, travellerAges: [35, 8],
+    getRecordForItem: (item) => (item.researchRefId ? records[item.researchRefId] : null),
+  });
+  assert.equal(breakdown.categoryTotals.accommodation.INR, 6000);
+  assert.equal(breakdown.categoryTotals.food.INR, 800, 'only the priced restaurant; the un-priced one is not counted as zero');
+  assert.equal(breakdown.categoryTotals.transport.INR, 2400, 'the override, not the 2000 Research price');
+  assert.equal(breakdown.categoryTotals.attractions.INR, 750, 'adult 500 + child 250');
+  assert.equal(breakdown.categoryTotals.other.INR, 300);
+  assert.equal(breakdown.overallByCurrency.INR, 6000 + 800 + 2400 + 750 + 300);
+  assert.deepEqual(breakdown.unestimatedItems.map(u => u.itemId), ['i5'], 'the un-priced restaurant is surfaced as not estimated');
+});
+
+await test('an empty Planning has no totals and no un-estimated items', async () => {
+  const breakdown = calculatePlanningCostBreakdown({ items: [], alternatives: [], optionGroupsById: {}, getRecordForItem: () => null, travellerAges: [] });
+  assert.deepEqual(breakdown.overallByCurrency, {});
+  assert.deepEqual(breakdown.unestimatedItems, []);
+  for (const category of COST_CATEGORIES) assert.deepEqual(breakdown.categoryTotals[category], {});
+});
+
+await test('amounts in different currencies are kept apart per currency, never blindly summed together', async () => {
+  const items = [
+    { id: 'a', itemType: 'custom', optionGroupId: null, costSelections: { estimateOverride: { amount: '1000', currency: 'INR' } } },
+    { id: 'b', itemType: 'custom', optionGroupId: null, costSelections: { estimateOverride: { amount: '50', currency: 'USD' } } },
+  ];
+  const breakdown = calculatePlanningCostBreakdown({ items, alternatives: [], optionGroupsById: {}, getRecordForItem: () => null, travellerAges: [] });
+  assert.deepEqual(breakdown.overallByCurrency, { INR: 1000, USD: 50 });
+});
+
+console.log('\n48. Planning costs: currency conversion reuses the existing convertAmount mechanism');
+await test('convertTotalToHomeCurrency converts using the REAL stored exchange rates via the existing convertAmount()', async () => {
+  await setExchangeRate('USD', 'INR', 84);
+  await setExchangeRate('THB', 'INR', 2.5);
+  // 100 USD -> 8400 INR; 400 THB -> 1000 INR; 500 INR stays -> 9900 INR total
+  const total = await convertTotalToHomeCurrency({ USD: 100, THB: 400, INR: 500 }, 'INR', convertAmount);
+  assert.equal(total, 8400 + 1000 + 500);
+});
+
+await test('if ANY currency has no rate to the home currency, the whole converted total is null — never a silently partial number', async () => {
+  await setExchangeRate('USD', 'INR', 84);
+  const total = await convertTotalToHomeCurrency({ USD: 100, EUR: 50 }, 'INR', convertAmount);
+  assert.equal(total, null, 'EUR has no stored rate, so no trustworthy home total exists');
+});
+
+await test('a Planning entirely in the home currency needs no rate at all', async () => {
+  const total = await convertTotalToHomeCurrency({ INR: 2500 }, 'INR', convertAmount);
+  assert.equal(total, 2500);
+});
+
+await test('with no currency-tagged amounts there is no home total to show', async () => {
+  assert.equal(await convertTotalToHomeCurrency({}, 'INR', convertAmount), null);
+});
+
+await test('a Planning override can be in a different currency from the Research price; each stays in its own currency until converted', async () => {
+  await setExchangeRate('USD', 'INR', 84);
+  const result = calculateRestaurantCost({ costSelections: { estimateOverride: { amount: '20', currency: 'USD' } }, restaurant: { price: { amount: '800', currency: 'INR' } } });
+  assert.equal(result.currency, 'USD', 'the override currency wins along with the override amount');
+  assert.equal(await convertAmount(result.amount, result.currency, 'INR'), 1680);
+});
+
+console.log('\n49. Planning costs: traveller age drives fee bands through the real Planning/People data');
+await test('ages are derived from real People records as of the real Planning startDate', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const adult = await createPerson({ name: 'Adult', dob: '1990-03-01' });
+  const child = await createPerson({ name: 'Child', dob: '2016-08-20' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-12', travellerIds: [adult.id, child.id] });
+  const people = await listPeople();
+  const ages = people.filter(p => planning.travellerIds.includes(p.id)).map(p => ageAsOf(p.dob, planning.startDate));
+  assert.deepEqual(ages.sort((a, b) => a - b), [9, 35]);
+
+  const result = calculateAttractionCost({ costSelections: { selectedFeeBandIds: ['adult', 'child'] }, attraction: sampleAttraction, travellerAges: ages });
+  assert.equal(result.amount, 500 + 250);
+
+  // Shifting the trip across the child's birthday changes their age as of the start date.
+  const later = await updatePlanning(planning.id, { startDate: '2026-09-01', endDate: '2026-09-03' });
+  const laterAges = people.filter(p => later.travellerIds.includes(p.id)).map(p => ageAsOf(p.dob, later.startDate));
+  assert.deepEqual(laterAges.sort((a, b) => a - b), [10, 36]);
+});
+
+await test('calculateItemCost dispatches to the right calculator by Research type', async () => {
+  assert.equal(calculateItemCost({ researchRefType: 'restaurants', costSelections: null }, { record: { price: { amount: '800', currency: 'INR' } } }).amount, 800);
+  assert.equal(calculateItemCost({ researchRefType: 'transport', costSelections: null }, { record: { price: { amount: '2000', currency: 'INR' } } }).amount, 2000);
+  assert.equal(calculateItemCost({ researchRefType: 'accommodations', costSelections: null }, { record: sampleHotel, nights: 2 }).amount, 6000);
+  assert.equal(calculateItemCost({ researchRefType: 'attractions', costSelections: { selectedFeeBandIds: ['adult'] } }, { record: sampleAttraction, travellerAges: [30] }).amount, 500);
+  assert.equal(calculateItemCost({ researchRefType: null, costSelections: { estimateOverride: { amount: '10', currency: 'INR' } } }, {}).amount, 10);
+});
+
+console.log('\n50. Existing behavior preserved: Chunk 3/4 unaffected by cost fields');
+await test('costSelections does not disturb Option/alternative/validation behavior on the same items', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const mosque = await createAttraction(dest.id, { place: { name: 'Grand Mosque' }, openingHours: [{ id: '1', days: ['fri'], ranges: [{ start: '', end: '' }], closed: true }], feeBands: sampleAttraction.feeBands });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-09', endDate: '2026-01-11' }); // Jan 9 2026 = Friday
+  const item = await createTimelineItem(planning.id, 1, {
+    itemType: 'attraction', researchRefType: 'attractions', researchRefId: mosque.id, startTime: '10:00', plannedDuration: 60,
+    costSelections: { selectedFeeBandIds: ['adult'] },
+  });
+  const finding = checkOpeningHours({ item, record: mosque, weekdayKey: weekdayKeyForDate(planningDayDate(planning, 1)) });
+  assert.equal(finding.level, 'critical', 'the closed-day warning still fires exactly as before');
+  assert.equal(item.dayNumber, 1);
+  const updated = await updateTimelineItem(item.id, { notes: 'edited' });
+  assert.deepEqual(updated.costSelections, { selectedFeeBandIds: ['adult'] }, 'an unrelated edit never disturbs stored costSelections');
+});
+
+await test('a timeline item saved before this chunk (no costSelections key at all) still works and is simply not estimated', async () => {
+  const preCost = { id: 'old', planningId: 'p', dayNumber: 1, itemType: 'custom', title: 'Old item', researchRefType: null, optionGroupId: null };
+  assert.equal(preCost.costSelections, undefined);
+  const result = calculateItemCost(preCost, { record: null });
+  assert.equal(result.estimated, false);
+  const breakdown = calculatePlanningCostBreakdown({ items: [preCost], alternatives: [], optionGroupsById: {}, getRecordForItem: () => null, travellerAges: [] });
+  assert.equal(breakdown.unestimatedItems.length, 1);
+  assert.deepEqual(breakdown.overallByCurrency, {});
+});
+
+console.log('\n51. Home currency (correction): a global setting, independent of destination defaultCurrency');
+await test('getHomeCurrency defaults to INR on a fresh install, regardless of any destination\'s own defaultCurrency', async () => {
+  const dest = await createDestination({ name: 'Thailand' });
+  await setDestinationDefaultCurrency(dest.id, 'THB');
+  const destination = await getDestination(dest.id);
+  assert.equal(getDestinationDefaultCurrency(destination), 'THB', 'the destination default is genuinely THB');
+
+  const home = await getHomeCurrency();
+  assert.equal(home, 'INR', 'the global home currency defaults to INR regardless of the destination default');
+});
+
+await test('setHomeCurrency persists and getHomeCurrency returns the updated value on a later read', async () => {
+  await setHomeCurrency('USD');
+  assert.equal(await getHomeCurrency(), 'USD');
+  // Changing it again overwrites cleanly, not additively.
+  await setHomeCurrency('EUR');
+  assert.equal(await getHomeCurrency(), 'EUR');
+});
+
+await test('setHomeCurrency normalizes case and whitespace, and rejects an empty value', async () => {
+  await setHomeCurrency(' gbp ');
+  assert.equal(await getHomeCurrency(), 'GBP');
+  await assert.rejects(() => setHomeCurrency(''), /currency/i);
+  await assert.rejects(() => setHomeCurrency('   '), /currency/i);
+});
+
+await test('the home currency is a SINGLE global setting shared across every destination and Planning — it is not destination-scoped', async () => {
+  const destA = await createDestination({ name: 'Japan' });
+  const destB = await createDestination({ name: 'Iceland' });
+  await setDestinationDefaultCurrency(destA.id, 'JPY');
+  await setDestinationDefaultCurrency(destB.id, 'ISK');
+  await setHomeCurrency('CAD');
+  // Reading it in the context of either destination gives the exact
+  // same answer — there is only ever one home currency.
+  assert.equal(await getHomeCurrency(), 'CAD');
+  const reloadedA = await getDestination(destA.id);
+  const reloadedB = await getDestination(destB.id);
+  assert.equal(getDestinationDefaultCurrency(reloadedA), 'JPY', 'destination A default is unaffected');
+  assert.equal(getDestinationDefaultCurrency(reloadedB), 'ISK', 'destination B default is unaffected');
+});
+
+await test('a Planning cost total converts correctly to the home currency even when the destination default currency is completely different', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  await setDestinationDefaultCurrency(dest.id, 'LKR'); // destination default — must NOT be used as home currency
+  await setHomeCurrency('USD');
+  await setExchangeRate('LKR', 'USD', 0.0033);
+
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-12' });
+  const restaurant = await createRestaurantEntry(dest.id, { place: { name: 'Ministry of Crab' }, price: { amount: '30000', currency: 'LKR', unit: '', note: '' } });
+  await createTimelineItem(planning.id, 1, { itemType: 'meal', researchRefType: 'restaurants', researchRefId: restaurant.id });
+
+  const items = await listTimelineItems(planning.id);
+  const breakdown = calculatePlanningCostBreakdown({
+    items, alternatives: [], optionGroupsById: {}, travellerAges: [],
+    getRecordForItem: () => restaurant,
+  });
+  assert.equal(breakdown.overallByCurrency.LKR, 30000, 'the Research/Planning amount stays in its ORIGINAL currency (LKR) in the breakdown');
+
+  const home = await getHomeCurrency();
+  assert.equal(home, 'USD', 'home currency is USD, nothing to do with the LKR destination default');
+  const homeTotal = await convertTotalToHomeCurrency(breakdown.overallByCurrency, home, convertAmount);
+  assert.equal(Math.round(homeTotal * 100) / 100, 99, '30000 LKR * 0.0033 = 99 USD, converted via the existing convertAmount mechanism');
+});
+
+await test('if no exchange rate exists from a Planning\'s currency to the home currency, the home total is null — never a misleading partial figure', async () => {
+  const dest = await createDestination({ name: 'Mongolia' });
+  await setHomeCurrency('NZD'); // deliberately a pair with no stored rate
+  const breakdown = { INR: 1000, MNT: 50000 };
+  const total = await convertTotalToHomeCurrency(breakdown, await getHomeCurrency(), convertAmount);
+  assert.equal(total, null, 'no rate for either currency to NZD -> null, not a partial or zero total');
+  assert.ok(dest.id, 'destination created only to exercise a realistic context; unrelated to the null-total assertion');
+});
+
+console.log('\n52. Item-level alternative costs (correction): reuses the same calculation rules as timeline items, never duplicated');
+await test('an item alternative with selected attraction fee bands is costed by the SAME calculateAttractionCost logic a timeline item uses', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const attraction = await createAttraction(dest.id, { place: { name: 'Sigiriya' }, feeBands: sampleAttraction.feeBands });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-12' });
+  const mainItem = await createTimelineItem(planning.id, 1, { itemType: 'attraction', title: 'Main attraction plan' });
+  const alt = await createItemAlternative(mainItem.id, { researchRefType: 'attractions', researchRefId: attraction.id, selected: true, costSelections: { selectedFeeBandIds: ['adult', 'child'] } });
+
+  const altCost = calculateItemCost(alt, { record: attraction, travellerAges: [35, 8] });
+  const equivalentTimelineItem = { researchRefType: 'attractions', costSelections: alt.costSelections };
+  const timelineItemCost = calculateItemCost(equivalentTimelineItem, { record: attraction, travellerAges: [35, 8] });
+  assert.equal(altCost.amount, timelineItemCost.amount, 'identical costSelections + identical record -> identical result, proving no duplicated logic path');
+  assert.equal(altCost.amount, 750);
+});
+
+await test('an item alternative can carry a Planning-specific override for a restaurant/transport Research price, same mechanism as a timeline item', async () => {
+  const dest = await createDestination({ name: 'Japan' });
+  const restaurant = await createRestaurantEntry(dest.id, { place: { name: 'Sushi place' }, price: { amount: '800', currency: 'INR', unit: '', note: '' } });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-04-01', endDate: '2026-04-03' });
+  const lunchItem = await createTimelineItem(planning.id, 1, { itemType: 'meal', title: 'Lunch' });
+  const alt = await createItemAlternative(lunchItem.id, { researchRefType: 'restaurants', researchRefId: restaurant.id, costSelections: { estimateOverride: { amount: '1200', currency: 'INR' } } });
+
+  const cost = calculateItemCost(alt, { record: restaurant });
+  assert.equal(cost.amount, 1200, 'the override, not the Research 800');
+  assert.equal(cost.overridden, true);
+
+  const researchAfter = await getRestaurantEntry(restaurant.id);
+  assert.equal(researchAfter.price.amount, '800', 'Research is completely untouched by an alternative\'s cost override');
+});
+
+await test('updateItemAlternative can set/change costSelections on an EXISTING alternative, round-tripping through the real store', async () => {
+  const dest = await createDestination({ name: 'Vietnam' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-01', endDate: '2026-01-05' });
+  const item = await createTimelineItem(planning.id, 1, { itemType: 'meal', title: 'Dinner' });
+  const alt = await createItemAlternative(item.id, { title: 'Backup restaurant' });
+  assert.equal(alt.costSelections, null);
+
+  const updated = await updateItemAlternative(alt.id, { costSelections: { estimateOverride: { amount: '600', currency: 'INR' } } });
+  assert.deepEqual(updated.costSelections, { estimateOverride: { amount: '600', currency: 'INR' } });
+  const reloaded = await getItemAlternative(alt.id);
+  assert.deepEqual(reloaded.costSelections, { estimateOverride: { amount: '600', currency: 'INR' } }, 'persisted correctly');
+});
+
+console.log('\n53. Item-level alternative costs: all existing inclusion rules remain correct (regression)');
+await test('a SELECTED alternative with an included parent counts toward the Planning total', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-12' });
+  const lunch = await createTimelineItem(planning.id, 1, { itemType: 'meal', title: 'Lunch' }); // ordinary item -> always included
+  const alt = await createItemAlternative(lunch.id, { title: 'Restaurant', selected: true, costSelections: { estimateOverride: { amount: '700', currency: 'INR' } } });
+
+  const breakdown = calculatePlanningCostBreakdown({
+    items: [lunch], alternatives: [{ alternative: alt, parentItem: lunch }], optionGroupsById: {}, getRecordForItem: () => null, travellerAges: [],
+  });
+  assert.equal(breakdown.categoryTotals.food.INR, 700);
+});
+
+await test('an UNSELECTED sibling alternative does not count, even with a fully-populated cost estimate', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-12' });
+  const lunch = await createTimelineItem(planning.id, 1, { itemType: 'meal', title: 'Lunch' });
+  const chosen = await createItemAlternative(lunch.id, { title: 'Restaurant A', selected: true, costSelections: { estimateOverride: { amount: '700', currency: 'INR' } } });
+  const sibling = await createItemAlternative(lunch.id, { title: 'Restaurant B', selected: false, costSelections: { estimateOverride: { amount: '5000', currency: 'INR' } } });
+
+  const breakdown = calculatePlanningCostBreakdown({
+    items: [lunch], alternatives: [{ alternative: chosen, parentItem: lunch }, { alternative: sibling, parentItem: lunch }],
+    optionGroupsById: {}, getRecordForItem: () => null, travellerAges: [],
+  });
+  assert.equal(breakdown.categoryTotals.food.INR, 700, 'only the selected sibling counts — the unselected one (5000) never contributes');
+});
+
+await test('an alternative inside an UNSELECTED itinerary Option never counts, regardless of its own selected flag or cost estimate', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-12' });
+  const group = await createOptionGroup(planning.id, { dayNumber: 1, partLabel: 'Morning' });
+  const itemInA = await createTimelineItem(planning.id, 1, { itemType: 'meal', title: 'Lunch (A)', optionGroupId: group.id, optionLabel: 'A' });
+  const itemInB = await createTimelineItem(planning.id, 1, { itemType: 'meal', title: 'Lunch (B)', optionGroupId: group.id, optionLabel: 'B' });
+  const altInB = await createItemAlternative(itemInB.id, { title: 'Expensive restaurant', selected: true, costSelections: { estimateOverride: { amount: '9000', currency: 'INR' } } });
+  await selectOption(group.id, 'A');
+
+  const groupsById = Object.fromEntries((await listOptionGroupsForPlanning(planning.id)).map(g => [g.id, g]));
+  const breakdown = calculatePlanningCostBreakdown({
+    items: [itemInA, itemInB], alternatives: [{ alternative: altInB, parentItem: itemInB }],
+    optionGroupsById: groupsById, getRecordForItem: () => null, travellerAges: [],
+  });
+  assert.equal(breakdown.categoryTotals.food.INR, undefined, 'Option A has no priced items, Option B\'s alternative is excluded entirely — nothing counts');
+});
+
+await test('an UNRESOLVED (pending) Option group never double-counts alternatives from either competing Option', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-12' });
+  const group = await createOptionGroup(planning.id, { dayNumber: 1, partLabel: 'Morning' });
+  const itemInA = await createTimelineItem(planning.id, 1, { itemType: 'meal', title: 'Lunch (A)', optionGroupId: group.id, optionLabel: 'A' });
+  const itemInB = await createTimelineItem(planning.id, 1, { itemType: 'meal', title: 'Lunch (B)', optionGroupId: group.id, optionLabel: 'B' });
+  const altInA = await createItemAlternative(itemInA.id, { title: 'Restaurant A', selected: true, costSelections: { estimateOverride: { amount: '700', currency: 'INR' } } });
+  const altInB = await createItemAlternative(itemInB.id, { title: 'Restaurant B', selected: true, costSelections: { estimateOverride: { amount: '900', currency: 'INR' } } });
+  // selectOption is never called — the group stays at its default pending state.
+
+  const groupsById = Object.fromEntries((await listOptionGroupsForPlanning(planning.id)).map(g => [g.id, g]));
+  const breakdown = calculatePlanningCostBreakdown({
+    items: [itemInA, itemInB], alternatives: [{ alternative: altInA, parentItem: itemInA }, { alternative: altInB, parentItem: itemInB }],
+    optionGroupsById: groupsById, getRecordForItem: () => null, travellerAges: [],
+  });
+  assert.equal(breakdown.categoryTotals.food.INR, undefined, 'neither alternative counts while the Option is unresolved — never 700, never 900, never 1600');
+});
+
+await test('an alternative that is itself unresolved (selected: false) never counts, even with its parent fully included', async () => {
+  const dest = await createDestination({ name: 'Sri Lanka' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-12' });
+  const lunch = await createTimelineItem(planning.id, 1, { itemType: 'meal', title: 'Lunch', costSelections: { estimateOverride: { amount: '400', currency: 'INR' } } });
+  const altA = await createItemAlternative(lunch.id, { title: 'Option A', selected: false, costSelections: { estimateOverride: { amount: '700', currency: 'INR' } } });
+  const altB = await createItemAlternative(lunch.id, { title: 'Option B', selected: false, costSelections: { estimateOverride: { amount: '900', currency: 'INR' } } });
+
+  const breakdown = calculatePlanningCostBreakdown({
+    items: [lunch], alternatives: [{ alternative: altA, parentItem: lunch }, { alternative: altB, parentItem: lunch }],
+    optionGroupsById: {}, getRecordForItem: () => null, travellerAges: [],
+  });
+  // Only the parent item's own cost (400) counts — neither
+  // unresolved alternative is double-counted alongside it.
+  assert.equal(breakdown.categoryTotals.food.INR, 400);
 });
 
 console.log(`\n=== ${passed} passed, ${failed} failed ===\n`);

@@ -45,6 +45,39 @@ const STORE = 'timelineItems';
 // selected/rank fields remain inert for THIS record's own purposes
 // (they matter for itemAlternatives — see itemAlternatives.js — which
 // rank/select among alternatives FOR one timelineItems row).
+//
+// costSelections (additive, this chunk — Planning cost calculation):
+// an object holding whatever the item's own category needs to compute
+// an estimate, or null if nothing has been chosen/entered yet:
+//   - attractions:    { selectedFeeBandIds: [id, ...] }
+//   - restaurants:     { estimateOverride: Money | null }
+//   - transport:       { estimateOverride: Money | null }
+//   - accommodations:  { selectedExtraChargeLabels: [label, ...], estimateOverride: Money | null }
+//   - custom/other:    { estimateOverride: Money | null }
+// See lib/planningCosts.js for the actual calculation logic — this
+// field only ever stores the person's selections/overrides, never a
+// computed total (Planning costs are a live, recalculated estimate,
+// never a persisted number that could go stale). A stale id/label
+// inside costSelections (e.g. a feeBand the Research record no longer
+// has) is left exactly as stored — never silently rewritten — and
+// simply contributes nothing to the total while dangling; see
+// lib/planningCosts.js's calculateAttractionCost/calculateAccommodationCost.
+//
+// checkOutDayNumber (additive, accommodation stay-range correction):
+// for an accommodation-referencing item ONLY, the Planning day-number
+// the stay ends on — the item's own dayNumber is the check-in day, so
+// nights = checkOutDayNumber - dayNumber. This replaces an earlier,
+// temporary "enter the number of nights directly" mechanism
+// (costSelections.nights) that this correction removes entirely — see
+// lib/planningCosts.js's nightsForAccommodationItem for why a real
+// day-number range is preferable (it survives a Planning startDate
+// shift exactly like every other day-number-based fact already does,
+// and naturally supports more than one accommodation stay in the same
+// Planning, since each stay is just its own timeline item with its own
+// check-in/check-out days). null (the default, and what every
+// non-accommodation item always has) means no check-out day has been
+// set yet — nights is then treated as unknown, not guessed at 1 or any
+// other value.
 export const TIMELINE_ITEM_TYPES = ['travel', 'attraction', 'meal', 'accommodation', 'free_time', 'custom'];
 
 // Which Research sections are meaningful to reference from a timeline
@@ -69,6 +102,8 @@ export function emptyTimelineItem() {
     partLabel: null,
     optionGroupId: null,
     optionLabel: null,
+    costSelections: null,
+    checkOutDayNumber: null,
   };
 }
 
@@ -102,6 +137,17 @@ function assertValid(fields) {
   // optionLabel with no group to belong to is meaningless.
   if (fields.optionGroupId && !fields.optionLabel) throw new Error('An item in an Option group needs an Option label.');
   if (fields.optionLabel && !fields.optionGroupId) throw new Error('An Option label needs an Option group.');
+  // A check-out day, if set at all, must be a real day strictly after
+  // check-in — zero, negative, non-numeric, or a check-out on/before
+  // the check-in day are all rejected here rather than silently
+  // accepted and producing a nonsensical (zero or negative) nights
+  // count later in cost calculation. Leaving it unset entirely
+  // (null/undefined) is always valid — nights is then simply unknown.
+  if (fields.checkOutDayNumber !== null && fields.checkOutDayNumber !== undefined) {
+    if (!Number.isFinite(fields.checkOutDayNumber) || fields.checkOutDayNumber <= fields.dayNumber) {
+      throw new Error('Check-out day must be a later day than check-in.');
+    }
+  }
 }
 
 export async function createTimelineItem(planningId, dayNumber, fields) {
@@ -126,6 +172,8 @@ export async function createTimelineItem(planningId, dayNumber, fields) {
     partLabel: merged.partLabel || null,
     optionGroupId: merged.optionGroupId || null,
     optionLabel: merged.optionLabel || null,
+    costSelections: merged.costSelections ?? null,
+    checkOutDayNumber: merged.checkOutDayNumber ?? null,
     createdAt: now,
     updatedAt: now,
     deletedAt: null,
