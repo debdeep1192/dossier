@@ -66,6 +66,33 @@
   margin-left: var(--space-2);
 }
 
+/* Phase 1 — out-of-range day retention: shortening a Planning never
+   deletes a day's content (see plannings.js/timelineItems.js), but
+   previously such a day simply stopped being rendered at all once its
+   dayNumber fell outside the current range. This marks it clearly
+   instead of hiding it. */
+.planning-day--out-of-range {
+  background: var(--color-surface-sage);
+  border-style: dashed;
+}
+
+.planning-day__out-of-range-badge {
+  margin-left: var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  padding: 0 var(--space-2);
+  text-transform: none;
+}
+
+.planning-day__out-of-range-note {
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  margin: 0 0 var(--space-2);
+}
+
 .planning-item__finding {
   font-size: var(--text-sm);
   margin: var(--space-1) 0 0;
@@ -118,6 +145,34 @@
   border-color: var(--color-border-strong);
 }
 
+/* Phase 1 — a genuine scheduling conflict between two items in the
+   day's actual current sequence (see checkItemOverlap in
+   lib/planningValidation.js). Distinct, slightly stronger border than
+   the plain hover state, so it reads as "needs attention" without
+   needing a separate icon-only treatment. */
+.planning-item--conflict {
+  border-color: var(--color-coral-dark);
+}
+
+.planning-item__actions {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-1);
+}
+
+.planning-item__move {
+  border: none;
+  background: transparent;
+  color: var(--color-teal);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  cursor: pointer;
+  padding: var(--space-1) var(--space-2);
+}
+.planning-item__move:hover { text-decoration: underline; }
+
 .planning-item__main {
   min-width: 0;
   flex: 1;
@@ -155,6 +210,20 @@
   margin: var(--space-1) 0 0;
 }
 
+/* Phase 1 — compact Alternatives discoverability indicator. Plain
+   text, not a loud badge: this is a hint to open the item, not a
+   warning in its own right (an unresolved alternative selection is a
+   normal, valid state — see lib/planningCosts.js's own inclusion
+   rules, unchanged by this phase). */
+.planning-item__alt-indicator {
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+  margin: var(--space-1) 0 0;
+}
+.planning-item__alt-indicator--pending {
+  color: var(--color-coral-dark);
+}
+
 .planning-item__notes {
   color: var(--color-text-secondary);
   font-size: var(--text-sm);
@@ -177,16 +246,21 @@
   font-weight: 600;
 }
 
-/* Chunk 3 — Itinerary Option groups */
-.option-group {
+/* Phase 1 — an Option group rendered INLINE as one slot in the day's
+   chronological <ul>, not a separate block above everything. The
+   selected Option's items render as real .planning-item rows directly
+   inside this slot (see .option-group-slot__selected-items); every
+   Option (selected or not) also gets one compact summary row below —
+   this is the part that must never look like a real schedule entry
+   for an unselected/competing Option (see .option-group-slot__option). */
+.option-group-slot {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   padding: var(--space-3);
-  margin-bottom: var(--space-3);
   background: var(--color-surface-sage);
 }
 
-.option-group__header {
+.option-group-slot__header {
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -194,7 +268,7 @@
   margin-bottom: var(--space-2);
 }
 
-.option-group__part-label {
+.option-group-slot__part-label {
   font-weight: 600;
 }
 
@@ -209,46 +283,61 @@
   font-size: var(--text-sm);
 }
 
-.option-group__options {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
 .option-group__empty {
   color: var(--color-text-muted);
   font-size: var(--text-sm);
   margin: 0;
 }
 
-.option-group__option {
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: var(--space-2) var(--space-3);
-  background: var(--color-surface);
+.option-group-slot__selected-items {
+  list-style: none;
+  margin: 0 0 var(--space-3);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
 }
 
-.option-group__option--selected {
-  border-color: var(--color-teal);
+.option-group-slot__options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px dashed var(--color-border);
 }
 
-.option-group__option-header {
+/* Each Option's own compact row — deliberately plain text, not styled
+   like a .planning-item card, so an unselected Option can never be
+   mistaken for a real scheduled item even at a glance. */
+.option-group-slot__option {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
+  flex-wrap: wrap;
 }
 
-.option-group__option-tab {
+.option-group-slot__option--selected .option-group-slot__option-tab {
+  color: var(--color-teal);
+}
+
+.option-group-slot__option-tab {
   border: none;
   background: none;
   font-weight: 600;
   cursor: pointer;
   padding: 0;
+  text-align: left;
+  font-size: var(--text-sm);
   color: var(--color-text-primary);
 }
-.option-group__option-tab:hover {
+.option-group-slot__option-tab:hover {
   color: var(--color-teal);
+}
+
+.option-group-slot__option-summary {
+  font-weight: 400;
+  color: var(--color-text-muted);
 }
 
 /* Chunk 3 — Item Alternatives (inside the timeline item edit form) */

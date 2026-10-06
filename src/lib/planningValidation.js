@@ -42,11 +42,56 @@ export function weekdayKeyForDate(dateStr) {
 // --- Time arithmetic ---------------------------------------------
 
 // 'HH:mm' -> minutes since midnight, or null if not a parseable time.
-function toMinutes(hhmm) {
+// Exported (Phase 1 — schedule-first timeline) so the UI layer can
+// reuse the exact same parsing for end-time display and conflict
+// detection, rather than re-implementing time math in the component.
+export function toMinutes(hhmm) {
   if (!hhmm || typeof hhmm !== 'string') return null;
   const m = hhmm.match(/^(\d{1,2}):(\d{2})$/);
   if (!m) return null;
   return Number(m[1]) * 60 + Number(m[2]);
+}
+
+// Minutes-since-midnight -> 'HH:mm'. The inverse of toMinutes, used to
+// DERIVE and display an item's end time (startTime + plannedDuration)
+// without ever storing a separate end-time field — per the explicit
+// Phase 1 instruction not to persist a redundant derived value. Wraps
+// past 24:00 using modulo, which is the correct, honest way to show an
+// activity that runs past midnight (e.g. a 23:30 start + 90 min shows
+// as 23:30 → 01:00) rather than clamping or erroring; a day boundary
+// is not itself invalid for an item's duration.
+export function minutesToTime(totalMinutes) {
+  if (!Number.isFinite(totalMinutes)) return null;
+  const wrapped = ((totalMinutes % 1440) + 1440) % 1440;
+  const h = Math.floor(wrapped / 60);
+  const m = wrapped % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+// An item's displayed end time — startTime + plannedDuration only
+// (buffer is deliberately excluded here: buffer is transition/travel
+// time needed AFTER the activity, not part of the activity itself, so
+// showing it inside the activity's own start→end would misrepresent
+// how long the activity actually takes). Returns null when there's
+// nothing to compute from (no startTime, or no plannedDuration — a
+// bare start time with no duration has no derivable end).
+export function itemEndTime(item) {
+  const startMin = toMinutes(item?.startTime);
+  if (startMin === null || !Number.isFinite(item?.plannedDuration)) return null;
+  return minutesToTime(startMin + item.plannedDuration);
+}
+
+// An item's fully "occupied until" boundary for CONFLICT purposes —
+// startTime + plannedDuration + buffer. This is deliberately different
+// from itemEndTime: buffer IS relevant here, because the whole reason
+// buffer exists is "how much room this item needs before the next one
+// can reasonably start" (see the design note on checkItemOverlap
+// below). Returns null under the same conditions as itemEndTime.
+function occupiedUntilMinutes(item) {
+  const startMin = toMinutes(item?.startTime);
+  if (startMin === null || !Number.isFinite(item?.plannedDuration)) return null;
+  const buffer = Number.isFinite(item?.buffer) ? item.buffer : 0;
+  return startMin + item.plannedDuration + buffer;
 }
 
 // --- Opening-hours validation ---------------------------------------------
@@ -153,6 +198,57 @@ export function checkBestTime({ item, record }) {
   if (withinBestWindow) return null; // scheduled right in the recommended window — nothing to hint about
 
   return { level: 'hint', message: `Research suggests ${windowLabel} as the best time to visit.${noteSuffix}` };
+}
+
+// --- Schedule conflict detection (Phase 1 — two items, not one item vs. Research) ---------------------------------------------
+
+// Whether two scheduled items genuinely conflict in time, accounting
+// for duration AND buffer — Phase 1's "real schedule conflict
+// detection" requirement. Pure and symmetric: checkItemOverlap(a, b)
+// and checkItemOverlap(b, a) report the same conflict (or lack of
+// one); the caller decides which one item to attach the resulting
+// message to (see PlanningDetailPage.jsx, which attaches it to the
+// LATER-starting item, so it reads naturally as "this clashes with
+// the thing before it").
+//
+// Deliberately excluded from scope here (left to the caller to decide
+// which items are even worth comparing, same separation of concerns
+// checkOpeningHours already has from Option/Alternative inclusion):
+//   - this function has no awareness of Option groups or Alternatives;
+//     it only compares the two items it's given. Comparing two items
+//     that belong to DIFFERENT (competing) Options would be a false
+//     positive — they're alternatives to each other, never both
+//     "real" at once — so the caller must only pass pairs of items
+//     that are actually both part of the current itinerary.
+//
+// Semantics: item A conflicts with item B if A's occupied interval
+// (start -> start+duration+buffer) overlaps B's SCHEDULED interval
+// (start -> start+duration). Using the buffer-inclusive boundary on
+// only one side (whichever item comes first) is what correctly makes
+// "this item's buffer exists to protect the next item's start time"
+// meaningful, without double-penalizing by inflating both sides.
+// Two items that are simply adjacent — A ends exactly when B's
+// scheduled interval begins, with no buffer eaten into — do NOT
+// conflict; only genuine overlap does.
+export function checkItemOverlap(itemA, itemB) {
+  const aStart = toMinutes(itemA?.startTime);
+  const bStart = toMinutes(itemB?.startTime);
+  if (aStart === null || bStart === null) return null; // nothing to compare without both start times
+  if (!Number.isFinite(itemA?.plannedDuration) || !Number.isFinite(itemB?.plannedDuration)) return null; // can't determine an interval without a duration — never guessed
+
+  // Normalize so `first` is whichever item starts no later than the other.
+  const [first, second] = aStart <= bStart ? [itemA, itemB] : [itemB, itemA];
+  const firstOccupiedUntil = occupiedUntilMinutes(first);
+  const secondStart = toMinutes(second.startTime);
+  if (firstOccupiedUntil === null || secondStart === null) return null;
+
+  if (secondStart >= firstOccupiedUntil) return null; // no conflict — second starts at or after first is fully clear (including buffer)
+
+  const overlapMinutes = firstOccupiedUntil - secondStart;
+  return {
+    level: 'warning',
+    message: `Overlaps with the previous item by about ${overlapMinutes} min (including buffer).`,
+  };
 }
 
 // --- Combined check for one timeline item ---------------------------------------------

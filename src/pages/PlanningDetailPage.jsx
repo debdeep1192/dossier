@@ -10,7 +10,8 @@ import { listAttractions } from '../db/stores/attractions';
 import { listRestaurantEntries, isPlaceBased } from '../db/stores/restaurants';
 import { listAccommodations } from '../db/stores/accommodations';
 import { listTransportEntries } from '../db/stores/transport';
-import { weekdayKeyForDate, validateTimelineItem } from '../lib/planningValidation';
+import { weekdayKeyForDate, validateTimelineItem, itemEndTime, checkItemOverlap } from '../lib/planningValidation';
+import { planningDayDate } from '../db/stores/plannings';
 import {
   ageAsOf, nightsForAccommodationItem, calculateItemCost,
   calculatePlanningCostBreakdown, convertTotalToHomeCurrency, COST_CATEGORIES,
@@ -54,6 +55,20 @@ const COST_CATEGORY_LABELS = {
 const OPTION_LABELS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 function nextOptionLabel(existingLabels) {
   return OPTION_LABELS.find(l => !existingLabels.includes(l)) || null;
+}
+
+// Shared chronological sort for a list of timeline items: by
+// startTime when both have one, untimed items last, tie-broken by
+// creation order so the result is always stable. Used throughout
+// DaysTimeline/OptionGroupInlineSlot — one definition, not duplicated
+// per call site.
+function sortByTimeThenCreated(items) {
+  return [...(items || [])].sort((a, b) => {
+    if (a.startTime && b.startTime) return a.startTime.localeCompare(b.startTime);
+    if (a.startTime) return -1;
+    if (b.startTime) return 1;
+    return a.createdAt.localeCompare(b.createdAt);
+  });
 }
 
 // Resolves a timeline item's display title: a Research-referenced item
@@ -132,14 +147,26 @@ export default function PlanningDetailPage() {
         researchByTypeAndId[type] = Object.fromEntries(records.map(r => [r.id, r]));
       }));
     }
-    return { destinations, people, planning, destination, timelineItems, optionGroups, researchByTypeAndId };
+    // Every item alternative across the whole Planning, loaded once
+    // here and shared by both the cost summary (which needs every
+    // alternative to compute the total) and the day timeline (Phase 1
+    // — which needs, per item, how many alternatives exist and
+    // whether one is selected, to show a compact discoverability
+    // badge without a separate fetch per row).
+    const alternativesByItemId = {};
+    if (planning) {
+      await Promise.all(timelineItems.map(async (item) => {
+        alternativesByItemId[item.id] = await listAlternativesForItem(item.id);
+      }));
+    }
+    return { destinations, people, planning, destination, timelineItems, optionGroups, researchByTypeAndId, alternativesByItemId };
   }, [planningId, isNew]);
   const { data, error, loading, refresh } = useCachedQuery(`planning:${planningId || 'new'}`, fetcher);
 
   if (error && !data) return <ErrorState description={error} onRetry={refresh} />;
   if (loading && !data) return <LoadingState label="Loading…" />;
 
-  const { destinations, people, planning, destination, timelineItems, optionGroups, researchByTypeAndId } = data;
+  const { destinations, people, planning, destination, timelineItems, optionGroups, researchByTypeAndId, alternativesByItemId } = data;
 
   // Traveller ages as of the Planning's start date — computed once here
   // and shared by the cost summary and the per-item cost editor, so
@@ -198,17 +225,18 @@ export default function PlanningDetailPage() {
           researchByTypeAndId={researchByTypeAndId}
           travellerAges={travellerAges}
           currencyOptions={currencyOptions}
+          alternativesByItemId={alternativesByItemId}
           onChange={afterTimelineChange}
         />
       )}
 
       {!isNew && (
         <PlanningCostSummary
-          planning={planning}
           travellerAges={travellerAges}
           timelineItems={timelineItems}
           optionGroups={optionGroups}
           researchByTypeAndId={researchByTypeAndId}
+          alternativesByItemId={alternativesByItemId}
         />
       )}
     </div>
@@ -225,7 +253,7 @@ export default function PlanningDetailPage() {
 // (see isTimelineItemCurrentlyIncluded/isAlternativeCurrentlyIncluded)
 // contribute — an unselected Option's items, or an unresolved Option
 // group's items, contribute nothing, exactly per the approved design.
-function PlanningCostSummary({ planning, travellerAges, timelineItems, optionGroups, researchByTypeAndId }) {
+function PlanningCostSummary({ travellerAges, timelineItems, optionGroups, researchByTypeAndId, alternativesByItemId }) {
   const [homeTotal, setHomeTotal] = useState(undefined); // undefined = not yet computed, null = no rate available
   // The home currency is a small GLOBAL setting (db/appSettings.js),
   // deliberately independent of this (or any) destination's own
@@ -253,24 +281,20 @@ function PlanningCostSummary({ planning, travellerAges, timelineItems, optionGro
     return researchByTypeAndId[item.researchRefType]?.[item.researchRefId] || null;
   }
 
-  // Item alternatives aren't part of the page's main fetch (they're
-  // loaded per-item, on demand, inside ItemAlternativesPanel while
-  // editing one item — see below) — the cost summary needs ALL of
-  // them across the whole Planning, so it loads them itself here via
-  // the same cache key shape ItemAlternativesPanel already uses,
-  // ensuring both stay in sync after an edit invalidates that key.
-  const alternativesFetcher = useCallback(async () => {
-    const results = await Promise.all(timelineItems.map(async (item) => {
-      const alts = await listAlternativesForItem(item.id);
-      return alts.map(alternative => ({ alternative, parentItem: item }));
-    }));
-    return results.flat();
-  }, [timelineItems]);
-  const { data: alternatives } = useCachedQuery(`planning-cost-alternatives:${planning.id}`, alternativesFetcher);
+  // Item alternatives are loaded once, for the whole Planning, by the
+  // page's own main fetch (see PlanningDetailPage's fetcher) and
+  // shared with the day timeline (Phase 1 — for its discoverability
+  // badges) via alternativesByItemId, rather than this component
+  // fetching them separately — same data, one source.
+  const alternatives = Object.entries(alternativesByItemId).flatMap(([itemId, alts]) => {
+    const parentItem = timelineItems.find(i => i.id === itemId);
+    if (!parentItem) return [];
+    return alts.map(alternative => ({ alternative, parentItem }));
+  });
 
   const breakdown = calculatePlanningCostBreakdown({
     items: timelineItems,
-    alternatives: alternatives || [],
+    alternatives,
     optionGroupsById,
     getRecordForItem,
     travellerAges,
@@ -439,35 +463,58 @@ function PlanningForm({ destinations, people, planning, onSaved }) {
 }
 
 // Derived Days (Chunk 1), each day's plain timeline items (Chunk 2),
-// and now (Chunk 3) each day's itinerary Option groups. Still no
-// planningDays store — dayNumber -> calendar date is always computed
-// fresh from the Planning's current startDate (see plannings.js's
-// listPlanningDays). Items and groups are both keyed by dayNumber,
-// which is exactly why they stay attached to "Day 1" when startDate
-// shifts: nothing here is keyed by calendar date.
+// each day's itinerary Option groups (Chunk 3), and now (Phase 1) a
+// genuine single chronological schedule per day, plus out-of-range
+// day retention and item move/reorder.
 //
+// Still no planningDays store — dayNumber -> calendar date is always
+// computed fresh from the Planning's current startDate (see
+// plannings.js's listPlanningDays). Items and groups are both keyed by
+// dayNumber, which is exactly why they stay attached to "Day 1" when
+// startDate shifts: nothing here is keyed by calendar date.
+//
+// Phase 1 — out-of-range days: listPlanningDays() only ever returns
+// the CURRENT trip's day range (per planningDayCount). If the Planning
+// was shortened after items were added to a later day, those items
+// still exist (shortening never deletes anything — see plannings.js)
+// but would previously simply never render, because nothing asked for
+// a day number past the new range. This extends the locally-rendered
+// day list with any day numbers that still have real content but fall
+// outside the current range, marked outOfRange: true — a purely
+// presentational extension; plannings.js itself is untouched, and no
+// planningDays store was introduced, per the explicit instruction.
+function daysToRender(planning, timelineItems, optionGroups) {
+  const currentDays = listPlanningDays(planning);
+  const currentDayCount = currentDays.length;
+  const dayNumbersWithContent = new Set([
+    ...timelineItems.map(i => i.dayNumber),
+    ...optionGroups.map(g => g.dayNumber),
+  ]);
+  const outOfRangeDayNumbers = [...dayNumbersWithContent]
+    .filter(n => Number.isFinite(n) && n > currentDayCount)
+    .sort((a, b) => a - b);
+  const outOfRangeDays = outOfRangeDayNumbers.map(dayNumber => ({
+    dayNumber,
+    date: planningDayDate(planning, dayNumber),
+    outOfRange: true,
+  }));
+  return [...currentDays.map(d => ({ ...d, outOfRange: false })), ...outOfRangeDays];
+}
+
 // A day's items split into two kinds, per the approved design:
 //   - "ordinary" items: optionGroupId is null — ungrouped, always
 //     current, exactly Chunk 2's behavior, unaffected by Chunk 3.
 //   - "grouped" items: belong to one of the day's Option groups,
-//     rendered under that group with Option tabs, a Selection-pending
-//     indicator, and a way to pick the current Option.
-function DaysTimeline({ planning, destinationId, timelineItems, optionGroups, researchByTypeAndId, travellerAges, currencyOptions, onChange }) {
+//     rendered inline at their place in the day's chronological
+//     sequence (Phase 1), not as a separate block above everything.
+function DaysTimeline({ planning, destinationId, timelineItems, optionGroups, researchByTypeAndId, travellerAges, currencyOptions, alternativesByItemId, onChange }) {
   const [addingToDay, setAddingToDay] = useState(null);
   const [editingItem, setEditingItem] = useState(null);
   const [addingGroupToDay, setAddingGroupToDay] = useState(null);
   const [addingItemToOption, setAddingItemToOption] = useState(null); // { dayNumber, group, optionLabel }
+  const [movingItem, setMovingItem] = useState(null);
 
-  const days = listPlanningDays(planning);
-
-  function sortByTime(items) {
-    return [...items].sort((a, b) => {
-      if (a.startTime && b.startTime) return a.startTime.localeCompare(b.startTime);
-      if (a.startTime) return -1;
-      if (b.startTime) return 1;
-      return a.createdAt.localeCompare(b.createdAt);
-    });
-  }
+  const days = daysToRender(planning, timelineItems, optionGroups);
 
   const ordinaryItemsByDay = {};
   const groupedItemsByGroupId = {};
@@ -478,29 +525,81 @@ function DaysTimeline({ planning, destinationId, timelineItems, optionGroups, re
       (ordinaryItemsByDay[item.dayNumber] ||= []).push(item);
     }
   }
-  for (const dayNumber of Object.keys(ordinaryItemsByDay)) ordinaryItemsByDay[dayNumber] = sortByTime(ordinaryItemsByDay[dayNumber]);
-  for (const groupId of Object.keys(groupedItemsByGroupId)) groupedItemsByGroupId[groupId] = sortByTime(groupedItemsByGroupId[groupId]);
+  for (const dayNumber of Object.keys(ordinaryItemsByDay)) ordinaryItemsByDay[dayNumber] = sortByTimeThenCreated(ordinaryItemsByDay[dayNumber]);
+  for (const groupId of Object.keys(groupedItemsByGroupId)) groupedItemsByGroupId[groupId] = sortByTimeThenCreated(groupedItemsByGroupId[groupId]);
 
   const groupsByDay = {};
   for (const group of optionGroups) (groupsByDay[group.dayNumber] ||= []).push(group);
 
-  // Day-level indicator (Chunk 4): true if ANY item scheduled on this
-  // day — ordinary or inside any Option, selected or not, since an
+  // Phase 1 — one chronological schedule per day. Builds a single,
+  // time-ordered list of "slots" for a day: an ordinary item is its
+  // own slot; an entire Option group is ONE slot, anchored at the
+  // earliest time among whichever items currently represent it (the
+  // selected Option's items if resolved, otherwise the earliest time
+  // across every competing Option, so a still-undecided group still
+  // lands at roughly the right point in the day rather than always
+  // floating to the top). This is what replaces the old "all Option
+  // groups first, then all ordinary items" split — Options now render
+  // inline at their actual place in the day, per the Phase 1
+  // requirement, while still never turning an unselected Option's
+  // items into real schedule rows (see OptionGroupInlineSlot below).
+  function buildDaySlots(dayNumber) {
+    const dayOrdinary = (ordinaryItemsByDay[dayNumber] || []).map(item => ({
+      kind: 'item', item, anchorTime: item.startTime || null, anchorCreatedAt: item.createdAt,
+    }));
+    const dayGroups = (groupsByDay[dayNumber] || []).map(group => {
+      const groupItems = groupedItemsByGroupId[group.id] || [];
+      const selectedItems = group.selectedOptionLabel ? groupItems.filter(i => i.optionLabel === group.selectedOptionLabel) : [];
+      const anchorSource = selectedItems.length > 0 ? selectedItems : groupItems;
+      const timed = anchorSource.filter(i => i.startTime).sort((a, b) => a.startTime.localeCompare(b.startTime));
+      const anchorTime = timed[0]?.startTime || null;
+      const earliestCreatedAt = anchorSource.reduce((min, i) => (!min || i.createdAt < min ? i.createdAt : min), null);
+      return { kind: 'optionGroup', group, groupItems, anchorTime, anchorCreatedAt: earliestCreatedAt || group.createdAt };
+    });
+    return [...dayOrdinary, ...dayGroups].sort((a, b) => {
+      if (a.anchorTime && b.anchorTime) return a.anchorTime.localeCompare(b.anchorTime);
+      if (a.anchorTime) return -1;
+      if (b.anchorTime) return 1;
+      return (a.anchorCreatedAt || '').localeCompare(b.anchorCreatedAt || '');
+    });
+  }
+
+  // The day's actual, currently-real sequence for conflict-checking:
+  // ordinary items plus whichever items belong to each group's
+  // SELECTED Option only — never unselected/competing content, since
+  // two items that are alternatives to each other (different Options)
+  // can never genuinely conflict with one another; only genuinely
+  // concurrent real plans can.
+  function currentSequenceForDay(dayNumber) {
+    const ordinary = ordinaryItemsByDay[dayNumber] || [];
+    const selectedFromGroups = (groupsByDay[dayNumber] || []).flatMap(group => {
+      if (!group.selectedOptionLabel) return [];
+      return (groupedItemsByGroupId[group.id] || []).filter(i => i.optionLabel === group.selectedOptionLabel);
+    });
+    return sortByTimeThenCreated([...ordinary, ...selectedFromGroups]);
+  }
+
+  // Day-level indicator: true if ANY item scheduled on this day —
+  // ordinary or inside any Option, selected or not, since an
   // unselected Option's items are still "planned possibilities" worth
-  // knowing about — has a critical or warning-level finding. Purely
-  // derived for display; nothing here is persisted.
+  // knowing about — has an opening-hours finding, OR if the day's
+  // actual current sequence has a genuine scheduling conflict (Phase
+  // 1). Purely derived for display; nothing here is persisted.
   function dayHasWarning(dayNumber, weekdayKey) {
     const dayItems = [
       ...(ordinaryItemsByDay[dayNumber] || []),
       ...(groupsByDay[dayNumber] || []).flatMap(g => groupedItemsByGroupId[g.id] || []),
     ];
-    return dayItems.some(item => {
+    const hasOpeningHoursIssue = dayItems.some(item => {
       if (!item.researchRefId) return false;
       const record = researchByTypeAndId[item.researchRefType]?.[item.researchRefId];
       if (!record) return false;
       const findings = validateTimelineItem({ item, record, weekdayKey });
       return Boolean(findings.openingHours);
     });
+    if (hasOpeningHoursIssue) return true;
+    const sequence = currentSequenceForDay(dayNumber);
+    return sequence.some((item, i) => i > 0 && checkItemOverlap(sequence[i - 1], item));
   }
 
   async function handleDeleteItem(item) {
@@ -539,65 +638,88 @@ function DaysTimeline({ planning, destinationId, timelineItems, optionGroups, re
       <h2>Days</h2>
       <div className="planning-days__list planning-days__list--timeline">
         {days.map(day => {
-          const dayGroups = groupsByDay[day.dayNumber] || [];
-          const dayOrdinaryItems = ordinaryItemsByDay[day.dayNumber] || [];
+          const slots = buildDaySlots(day.dayNumber);
+          const weekdayKey = weekdayKeyForDate(day.date);
+          const sequence = currentSequenceForDay(day.dayNumber);
+          // Map of itemId -> overlap finding, computed once per day
+          // against the day's actual current sequence (Phase 1), then
+          // looked up per-row below — attached to the LATER item of
+          // each conflicting pair, so the warning reads as "this
+          // clashes with what's right before it" in the rendered order.
+          const overlapByItemId = {};
+          for (let i = 1; i < sequence.length; i++) {
+            const finding = checkItemOverlap(sequence[i - 1], sequence[i]);
+            if (finding) overlapByItemId[sequence[i].id] = finding;
+          }
+
           return (
-            <Card key={day.dayNumber} padding="sm" className="planning-day">
+            <Card key={day.dayNumber} padding="sm" className={`planning-day${day.outOfRange ? ' planning-day--out-of-range' : ''}`}>
               <div className="planning-day__header">
                 <div>
                   <span className="planning-days__number">Day {day.dayNumber}</span>
                   <span className="planning-days__date">{day.date}</span>
-                  {dayHasWarning(day.dayNumber, weekdayKeyForDate(day.date)) && (
-                    <span className="planning-day__warning-badge" title="At least one item on this day has an opening-hours issue">⚠️</span>
+                  {day.outOfRange && (
+                    <span className="planning-day__out-of-range-badge">Outside current trip dates</span>
+                  )}
+                  {!day.outOfRange && dayHasWarning(day.dayNumber, weekdayKey) && (
+                    <span className="planning-day__warning-badge" title="At least one item on this day has an opening-hours or scheduling issue">⚠️</span>
                   )}
                 </div>
-                <div className="planning-day__header-actions">
-                  <Button variant="secondary" size="sm" onClick={() => setAddingGroupToDay(day.dayNumber)}>+ Add Option group</Button>
-                  <Button variant="secondary" size="sm" onClick={() => setAddingToDay(day.dayNumber)}>+ Add item</Button>
-                </div>
+                {!day.outOfRange && (
+                  <div className="planning-day__header-actions">
+                    <Button variant="secondary" size="sm" onClick={() => setAddingGroupToDay(day.dayNumber)}>+ Add Option group</Button>
+                    <Button variant="secondary" size="sm" onClick={() => setAddingToDay(day.dayNumber)}>+ Add item</Button>
+                  </div>
+                )}
               </div>
 
-              {dayGroups.length === 0 && dayOrdinaryItems.length === 0 ? (
+              {day.outOfRange && (
+                <p className="planning-day__out-of-range-note">
+                  This day is no longer part of the trip's current dates, but its content below hasn't been deleted. You can still open, edit, move, or remove these items.
+                </p>
+              )}
+
+              {slots.length === 0 ? (
                 <p className="planning-day__empty">Nothing scheduled yet.</p>
               ) : (
-                <>
-                  {dayGroups.map(group => (
-                    <OptionGroupPanel
-                      key={group.id}
-                      group={group}
-                      travellerAges={travellerAges}
-                      items={groupedItemsByGroupId[group.id] || []}
+                <ul className="planning-day__items">
+                  {slots.map(slot => slot.kind === 'item' ? (
+                    <TimelineItemRow
+                      key={slot.item.id}
+                      item={slot.item}
                       researchByTypeAndId={researchByTypeAndId}
-                      weekdayKey={weekdayKeyForDate(day.date)}
-                      onSelectOption={(label) => handleSelectOption(group, label)}
-                      onDeleteGroup={() => handleDeleteGroup(group)}
+                      travellerAges={travellerAges}
+                      weekdayKey={weekdayKey}
+                      overlapFinding={overlapByItemId[slot.item.id]}
+                      alternatives={alternativesByItemId[slot.item.id] || []}
+                      onEdit={() => setEditingItem(slot.item)}
+                      onDelete={() => handleDeleteItem(slot.item)}
+                      onMove={() => setMovingItem(slot.item)}
+                    />
+                  ) : (
+                    <OptionGroupInlineSlot
+                      key={slot.group.id}
+                      group={slot.group}
+                      groupItems={slot.groupItems}
+                      travellerAges={travellerAges}
+                      researchByTypeAndId={researchByTypeAndId}
+                      weekdayKey={weekdayKey}
+                      overlapByItemId={overlapByItemId}
+                      alternativesByItemId={alternativesByItemId}
+                      onSelectOption={(label) => handleSelectOption(slot.group, label)}
+                      onDeleteGroup={() => handleDeleteGroup(slot.group)}
                       onEditItem={setEditingItem}
                       onDeleteItem={handleDeleteItem}
-                      onAddItemToOption={(optionLabel) => setAddingItemToOption({ dayNumber: day.dayNumber, group, optionLabel })}
+                      onMoveItem={setMovingItem}
+                      onAddItemToOption={(optionLabel) => setAddingItemToOption({ dayNumber: day.dayNumber, group: slot.group, optionLabel })}
                       onAddNewOption={() => {
-                        const existing = [...new Set((groupedItemsByGroupId[group.id] || []).map(i => i.optionLabel))];
+                        const existing = [...new Set(slot.groupItems.map(i => i.optionLabel))];
                         const label = nextOptionLabel(existing);
-                        if (label) setAddingItemToOption({ dayNumber: day.dayNumber, group, optionLabel: label });
+                        if (label) setAddingItemToOption({ dayNumber: day.dayNumber, group: slot.group, optionLabel: label });
                       }}
                     />
                   ))}
-
-                  {dayOrdinaryItems.length > 0 && (
-                    <ul className="planning-day__items">
-                      {dayOrdinaryItems.map(item => (
-                        <TimelineItemRow
-                          key={item.id}
-                          item={item}
-                          researchByTypeAndId={researchByTypeAndId}
-                          travellerAges={travellerAges}
-                          weekdayKey={weekdayKeyForDate(day.date)}
-                          onEdit={() => setEditingItem(item)}
-                          onDelete={() => handleDeleteItem(item)}
-                        />
-                      ))}
-                    </ul>
-                  )}
-                </>
+                </ul>
               )}
             </Card>
           );
@@ -653,6 +775,14 @@ function DaysTimeline({ planning, destinationId, timelineItems, optionGroups, re
           onSaved={() => { setAddingItemToOption(null); onChange(); }}
         />
       )}
+      {movingItem !== null && (
+        <MoveItemForm
+          item={movingItem}
+          days={days}
+          onClose={() => setMovingItem(null)}
+          onMoved={() => { setMovingItem(null); onChange(); }}
+        />
+      )}
     </div>
   );
 }
@@ -664,15 +794,29 @@ function DaysTimeline({ planning, destinationId, timelineItems, optionGroups, re
 // action so the person isn't limited to only the Options that already
 // exist — the group itself is created empty (see OptionGroupForm) and
 // Options are populated by adding items to them one at a time.
-function OptionGroupPanel({ group, items, researchByTypeAndId, travellerAges, weekdayKey, onSelectOption, onDeleteGroup, onEditItem, onDeleteItem, onAddItemToOption, onAddNewOption }) {
+// One Itinerary Option group, rendered INLINE at its place in the
+// day's chronological sequence (Phase 1) — a single list item/slot in
+// the day's <ul>, not a separate block above everything. Per the
+// explicit Phase 1 requirement, an unselected Option's content must
+// NOT look like a real itinerary item: once a group has a selection,
+// its SELECTED Option's items render as genuine, full TimelineItemRow
+// entries (they ARE the real schedule now), while every OTHER
+// (unselected/competing) Option collapses to one compact summary line
+// — never full rows, never double-counted as separate schedule
+// entries. Before any selection is made, every Option is shown as a
+// compact summary (nothing is "real" yet), with an explicit
+// Selection-pending indicator, matching the existing
+// pending-never-counts semantics unchanged from Chunk 3.
+function OptionGroupInlineSlot({ group, groupItems, researchByTypeAndId, travellerAges, weekdayKey, overlapByItemId, alternativesByItemId, onSelectOption, onDeleteGroup, onEditItem, onDeleteItem, onMoveItem, onAddItemToOption, onAddNewOption }) {
   const itemsByOption = {};
-  for (const item of items) (itemsByOption[item.optionLabel] ||= []).push(item);
+  for (const item of groupItems) (itemsByOption[item.optionLabel] ||= []).push(item);
   const optionLabels = Object.keys(itemsByOption).sort();
+  const selectedItems = group.selectedOptionLabel ? sortByTimeThenCreated(itemsByOption[group.selectedOptionLabel] || []) : [];
 
   return (
-    <div className="option-group">
-      <div className="option-group__header">
-        <span className="option-group__part-label">{group.partLabel}</span>
+    <li className="option-group-slot">
+      <div className="option-group-slot__header">
+        <span className="option-group-slot__part-label">{group.partLabel}</span>
         {group.selectedOptionLabel === null ? (
           <span className="option-group__pending">⚠️ Selection pending</span>
         ) : (
@@ -681,42 +825,66 @@ function OptionGroupPanel({ group, items, researchByTypeAndId, travellerAges, we
         <button type="button" className="entry-card__delete" onClick={onDeleteGroup}>Delete group</button>
       </div>
 
-      <div className="option-group__options">
+      {/* The selected Option's items render as the REAL schedule —
+          full rows, exactly like an ordinary item, since this IS what
+          will actually happen. */}
+      {selectedItems.length > 0 && (
+        <ul className="option-group-slot__selected-items">
+          {selectedItems.map(item => (
+            <TimelineItemRow
+              key={item.id}
+              item={item}
+              researchByTypeAndId={researchByTypeAndId}
+              travellerAges={travellerAges}
+              weekdayKey={weekdayKey}
+              overlapFinding={overlapByItemId[item.id]}
+              alternatives={alternativesByItemId[item.id] || []}
+              onEdit={() => onEditItem(item)}
+              onDelete={() => onDeleteItem(item)}
+              onMove={() => onMoveItem(item)}
+            />
+          ))}
+        </ul>
+      )}
+
+      {/* Every Option — compact summary row with a tap-to-select tab.
+          The currently-selected one is marked; every other Option is
+          visibly just a considered possibility, never a schedule
+          entry in its own right. */}
+      <div className="option-group-slot__options">
         {optionLabels.length === 0 && (
           <p className="option-group__empty">No Options yet — add items to Option A to get started.</p>
         )}
-        {optionLabels.map(label => (
-          <div key={label} className={`option-group__option${group.selectedOptionLabel === label ? ' option-group__option--selected' : ''}`}>
-            <div className="option-group__option-header">
-              <button type="button" className="option-group__option-tab" onClick={() => onSelectOption(label)}>
-                Option {label}{group.selectedOptionLabel === label ? ' ✓' : ''}
+        {optionLabels.map(label => {
+          const isSelected = group.selectedOptionLabel === label;
+          const optionItems = sortByTimeThenCreated(itemsByOption[label]);
+          const summary = optionItems.map(i => (i.researchRefId ? describeReferencedRecord(i.researchRefType, researchByTypeAndId[i.researchRefType]?.[i.researchRefId]) : i.title)).join(', ');
+          return (
+            <div key={label} className={`option-group-slot__option${isSelected ? ' option-group-slot__option--selected' : ''}`}>
+              <button type="button" className="option-group-slot__option-tab" onClick={() => onSelectOption(label)}>
+                Option {label}{isSelected ? ' ✓' : ''}
+                {!isSelected && summary && <span className="option-group-slot__option-summary"> — {summary}</span>}
               </button>
               <Button variant="secondary" size="sm" onClick={() => onAddItemToOption(label)}>+ Add item</Button>
             </div>
-            <ul className="planning-day__items">
-              {itemsByOption[label].map(item => (
-                <TimelineItemRow
-                  key={item.id}
-                  item={item}
-                  researchByTypeAndId={researchByTypeAndId}
-                  travellerAges={travellerAges}
-                  weekdayKey={weekdayKey}
-                  onEdit={() => onEditItem(item)}
-                  onDelete={() => onDeleteItem(item)}
-                />
-              ))}
-            </ul>
-          </div>
-        ))}
+          );
+        })}
         <Button variant="secondary" size="sm" onClick={onAddNewOption}>+ Add new Option</Button>
       </div>
-    </div>
+    </li>
   );
 }
 
+
+
 // One row in a timeline list — used both for ordinary (ungrouped)
-// items and for items inside an Option, so the two always look and
-// behave the same way.
+// items and for items inside an Option's selected sequence, so the
+// two always look and behave the same way once they're part of the
+// day's real schedule. Phase 1: this is the schedule-first row —
+// start→end time (end derived, never stored — see itemEndTime in
+// lib/planningValidation.js), a compact duration+buffer line, a
+// scheduling-conflict warning when one applies, and a compact
+// Alternatives indicator — rather than a flat list of database fields.
 //
 // Chunk 4: runs the pure validation checks (opening hours / typical
 // duration / best-time) against the item's resolved Research record,
@@ -728,7 +896,7 @@ function OptionGroupPanel({ group, items, researchByTypeAndId, travellerAges, we
 // this component has no awareness of Option selection state at all,
 // deliberately, since opening-hours/duration/best-time facts about a
 // place don't depend on whether this particular sequence was chosen.
-function TimelineItemRow({ item, researchByTypeAndId, travellerAges, weekdayKey, onEdit, onDelete }) {
+function TimelineItemRow({ item, researchByTypeAndId, travellerAges, weekdayKey, overlapFinding, alternatives, onEdit, onDelete, onMove }) {
   const referencedRecord = item.researchRefType ? researchByTypeAndId[item.researchRefType]?.[item.researchRefId] : null;
   const title = item.researchRefId ? describeReferencedRecord(item.researchRefType, referencedRecord) : item.title;
   const findings = item.researchRefId ? validateTimelineItem({ item, record: referencedRecord, weekdayKey }) : { openingHours: null, duration: null, bestTime: null };
@@ -743,26 +911,48 @@ function TimelineItemRow({ item, researchByTypeAndId, travellerAges, weekdayKey,
   // free-time/custom entry.
   const cost = calculateItemCost(item, { record: referencedRecord, travellerAges, nights: item.researchRefType === 'accommodations' ? nightsForAccommodationItem(item) : undefined });
   const isCostBearingType = ['attractions', 'restaurants', 'accommodations', 'transport'].includes(item.researchRefType);
+  const endTime = itemEndTime(item);
+  const selectedAlternativeCount = (alternatives || []).filter(a => a.selected).length;
 
   return (
-    <li className="planning-item" onClick={onEdit}>
+    <li className={`planning-item${overlapFinding ? ' planning-item--conflict' : ''}`} onClick={onEdit}>
       <div className="planning-item__main">
         <div className="planning-item__title-line">
-          {item.startTime && <span className="planning-item__time">{item.startTime}</span>}
+          {item.startTime && (
+            <span className="planning-item__time">
+              {item.startTime}{endTime ? ` → ${endTime}` : ''}
+            </span>
+          )}
           <span className="planning-item__title">{title}</span>
           {item.status === 'optional' && <span className="planning-item__badge">Optional</span>}
         </div>
         <p className="planning-item__meta">
           {ITEM_TYPE_LABELS[item.itemType]}
-          {item.plannedDuration ? ` · ${item.plannedDuration} min` : ''}
-          {item.buffer ? ` · +${item.buffer} min buffer` : ''}
+          {item.plannedDuration ? ` · ${item.plannedDuration}m` : ''}
+          {item.buffer ? ` · +${item.buffer}m buffer` : ''}
         </p>
+        {alternatives && alternatives.length > 0 && (
+          // Discoverability only (Phase 1 requirement) — never a
+          // separate schedule row per alternative, and never counted
+          // twice: this is purely a compact signal that alternatives
+          // exist for THIS slot, resolved or not. Clicking the item
+          // opens the edit form, where the full Alternatives panel
+          // already lives (unchanged from Chunk 3/5).
+          <p className={`planning-item__alt-indicator${selectedAlternativeCount === 0 ? ' planning-item__alt-indicator--pending' : ''}`}>
+            {selectedAlternativeCount > 0
+              ? `${alternatives.length} alternative${alternatives.length === 1 ? '' : 's'} (1 selected)`
+              : `${alternatives.length} alternative${alternatives.length === 1 ? '' : 's'} — none selected`}
+          </p>
+        )}
         {item.notes && <p className="planning-item__notes">{item.notes}</p>}
         {cost.estimated && (
           <p className="planning-item__cost">Est. {cost.currency || ''} {cost.amount.toLocaleString(undefined, { maximumFractionDigits: 0 })}{cost.overridden ? ' (overridden)' : ''}</p>
         )}
         {!cost.estimated && isCostBearingType && (
           <p className="planning-item__cost planning-item__cost--unknown">Cost not estimated</p>
+        )}
+        {overlapFinding && (
+          <p className="planning-item__finding planning-item__finding--warning">⚠️ {overlapFinding.message}</p>
         )}
         {findings.openingHours && (
           <p className={`planning-item__finding planning-item__finding--${findings.openingHours.level}`}>
@@ -776,7 +966,10 @@ function TimelineItemRow({ item, researchByTypeAndId, travellerAges, weekdayKey,
           <p className="planning-item__finding planning-item__finding--hint">💡 {findings.bestTime.message}</p>
         )}
       </div>
-      <button type="button" className="entry-card__delete" onClick={(e) => { e.stopPropagation(); onDelete(); }}>Delete</button>
+      <div className="planning-item__actions">
+        <button type="button" className="planning-item__move" onClick={(e) => { e.stopPropagation(); onMove(); }}>Move</button>
+        <button type="button" className="entry-card__delete" onClick={(e) => { e.stopPropagation(); onDelete(); }}>Delete</button>
+      </div>
     </li>
   );
 }
@@ -814,6 +1007,88 @@ function OptionGroupForm({ planningId, dayNumber, onClose, onSaved }) {
         <p className="field__hint">You'll add items to Option A, Option B, etc. next.</p>
         {error && <p className="form-error" role="alert">{error}</p>}
         <Button type="submit" fullWidth disabled={submitting}>{submitting ? 'Creating…' : 'Create Option group'}</Button>
+      </form>
+    </Modal>
+  );
+}
+
+// Move/reorder an existing item — Phase 1. Per the explicit
+// instruction, this repository's ordering model is entirely time-
+// based (see listTimelineItemsForDay in db/stores/timelineItems.js —
+// there is no separate position/rank field for a timeline item's own
+// ordering; rank exists only for ranking Alternatives against each
+// other, a different concept). "Reordering within a day" is therefore
+// honestly implemented as changing the item's start time — the thing
+// that actually determines display order — rather than inventing a
+// fake position field that could silently disagree with the time
+// shown right next to it. Changing the day moves the item to a
+// different dayNumber, preserving everything else on the record via a
+// plain updateTimelineItem() call (the same store function every
+// other edit already uses, so there is no separate "move" data path
+// to keep in sync).
+//
+// An item that belongs to an itinerary Option group can only have its
+// TIME changed here, not its day — the group itself is anchored to a
+// specific day (planningOptionGroups.dayNumber), so moving one of its
+// items to a different day would orphan it from a group that still
+// thinks it belongs to the original day. Moving such an item to
+// another day isn't prevented by hiding the fact; the day picker is
+// simply not offered for a grouped item, and a short note explains why.
+function MoveItemForm({ item, days, onClose, onMoved }) {
+  const [startTime, setStartTime] = useState(item.startTime || '');
+  const [dayNumber, setDayNumber] = useState(item.dayNumber);
+  const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const canChangeDay = !item.optionGroupId;
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setError('');
+    setSubmitting(true);
+    try {
+      // Only the two fields this form is actually responsible for are
+      // sent — updateTimelineItem() only ever touches fields it's
+      // given (see timelineItems.js), so everything else on the
+      // record (Research reference, title, notes, plannedDuration,
+      // buffer, status, rank, selected, costSelections, and its item
+      // Alternatives, which live in a separate store entirely) is
+      // left completely untouched by this save.
+      const fields = { startTime };
+      if (canChangeDay) fields.dayNumber = Number(dayNumber);
+      await updateTimelineItem(item.id, fields);
+      onMoved();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Modal open onClose={onClose} title="Move item">
+      <form onSubmit={handleSubmit}>
+        <Input
+          label="Start time"
+          type="time"
+          value={startTime}
+          onChange={e => setStartTime(e.target.value)}
+          hint="This is what determines the item's position in the day — there's no separate ordering from its time."
+        />
+        {canChangeDay ? (
+          <Select label="Day" value={dayNumber} onChange={e => setDayNumber(e.target.value)}>
+            {days.map(d => (
+              <option key={d.dayNumber} value={d.dayNumber}>
+                Day {d.dayNumber} — {d.date}{d.outOfRange ? ' (outside current trip dates)' : ''}
+              </option>
+            ))}
+          </Select>
+        ) : (
+          <p className="field__hint">
+            This item is part of an itinerary Option group, which is tied to Day {item.dayNumber} — to move it to a different day, remove it from the Option first.
+          </p>
+        )}
+        {error && <p className="form-error" role="alert">{error}</p>}
+        <Button type="submit" fullWidth disabled={submitting}>{submitting ? 'Saving…' : 'Save'}</Button>
       </form>
     </Modal>
   );

@@ -36,7 +36,7 @@ import { createPlanning, listPlannings, getPlanning, updatePlanning, deletePlann
 import { createTimelineItem, listTimelineItems, getTimelineItem, updateTimelineItem, deleteTimelineItem, listTimelineItemsForDay, TIMELINE_ITEM_TYPES, TIMELINE_RESEARCH_REF_TYPES } from '../stores/timelineItems.js';
 import { createOptionGroup, listOptionGroupsForPlanning, getOptionGroup, selectOption, deleteOptionGroup } from '../stores/planningOptionGroups.js';
 import { createItemAlternative, listAlternativesForItem, getItemAlternative, updateItemAlternative, deleteItemAlternative } from '../stores/itemAlternatives.js';
-import { weekdayKeyForDate, checkOpeningHours, checkDuration, checkBestTime, validateTimelineItem } from '../../lib/planningValidation.js';
+import { weekdayKeyForDate, checkOpeningHours, checkDuration, checkBestTime, validateTimelineItem, toMinutes, minutesToTime, itemEndTime, checkItemOverlap } from '../../lib/planningValidation.js';
 import { getHomeCurrency, setHomeCurrency } from '../appSettings.js';
 import {
   isTimelineItemCurrentlyIncluded, isAlternativeCurrentlyIncluded, ageAsOf, ageQualifiesForBand,
@@ -3746,6 +3746,255 @@ await test('an alternative that is itself unresolved (selected: false) never cou
   // Only the parent item's own cost (400) counts — neither
   // unresolved alternative is double-counted alongside it.
   assert.equal(breakdown.categoryTotals.food.INR, 400);
+});
+
+console.log('\n54. Phase 1 — derived end time, never a stored field (lib/planningValidation.js)');
+await test('toMinutes / minutesToTime round-trip correctly, including past-midnight wrap', async () => {
+  assert.equal(toMinutes('08:30'), 510);
+  assert.equal(toMinutes('00:00'), 0);
+  assert.equal(toMinutes(''), null);
+  assert.equal(toMinutes(null), null);
+  assert.equal(minutesToTime(510), '08:30');
+  assert.equal(minutesToTime(0), '00:00');
+  assert.equal(minutesToTime(1440), '00:00', 'exactly 24h wraps to the start of the next day');
+  assert.equal(minutesToTime(1500), '01:00');
+  assert.equal(minutesToTime(-30), '23:30', 'a negative value (defensive) wraps backward correctly rather than producing a negative time string');
+});
+
+await test('itemEndTime derives start + plannedDuration, exactly the worked example from the approved design (08:30 + 1h = 09:30)', async () => {
+  assert.equal(itemEndTime({ startTime: '08:30', plannedDuration: 60 }), '09:30');
+  assert.equal(itemEndTime({ startTime: '14:00', plannedDuration: 45 }), '14:45');
+});
+
+await test('itemEndTime correctly crosses a midnight boundary rather than erroring or clamping', async () => {
+  assert.equal(itemEndTime({ startTime: '23:30', plannedDuration: 90 }), '01:00');
+  assert.equal(itemEndTime({ startTime: '23:00', plannedDuration: 60 }), '00:00');
+});
+
+await test('itemEndTime returns null (never a guess) when there is nothing to derive from', async () => {
+  assert.equal(itemEndTime({ startTime: '08:30', plannedDuration: null }), null, 'no duration -> no end time');
+  assert.equal(itemEndTime({ startTime: '', plannedDuration: 60 }), null, 'no start time -> no end time');
+  assert.equal(itemEndTime({}), null);
+});
+
+await test('no end-time field is ever persisted on a timeline item — it stays purely derived', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-14' });
+  const item = await createTimelineItem(planning.id, 1, { itemType: 'custom', title: 'Tiger Hill sunrise', startTime: '04:30', plannedDuration: 90 });
+  assert.equal(Object.prototype.hasOwnProperty.call(item, 'endTime'), false, 'the stored record has no endTime field at all');
+  assert.equal(itemEndTime(item), '06:00', 'it is still correctly derivable on demand from the stored startTime/plannedDuration');
+});
+
+console.log('\n55. Phase 1 — real schedule conflict detection (checkItemOverlap)');
+await test('two items with a genuine time overlap produce a warning', async () => {
+  const a = { startTime: '08:00', plannedDuration: 90, buffer: 0 };
+  const b = { startTime: '09:00', plannedDuration: 30, buffer: 0 }; // a runs until 09:30, b starts at 09:00 -> overlap
+  const finding = checkItemOverlap(a, b);
+  assert.ok(finding);
+  assert.equal(finding.level, 'warning');
+});
+
+await test('two items that do not overlap at all produce no finding, regardless of the gap size', async () => {
+  assert.equal(checkItemOverlap({ startTime: '08:00', plannedDuration: 60, buffer: 0 }, { startTime: '10:00', plannedDuration: 30, buffer: 0 }), null, 'a two-hour gap is fine, not an error');
+  assert.equal(checkItemOverlap({ startTime: '08:00', plannedDuration: 60, buffer: 0 }, { startTime: '20:00', plannedDuration: 30, buffer: 0 }), null, 'a large gap (free time) is never flagged as an error');
+});
+
+await test('an item ending exactly when the next starts, with zero buffer, does not conflict', async () => {
+  const finding = checkItemOverlap({ startTime: '08:00', plannedDuration: 60, buffer: 0 }, { startTime: '09:00', plannedDuration: 30, buffer: 0 });
+  assert.equal(finding, null, 'back-to-back with no buffer eaten into is adjacent, not overlapping');
+});
+
+await test('buffer time is accounted for — a gap that would be fine on duration alone can still conflict once buffer is included', async () => {
+  // First item: 08:00-09:00 plus a 30-minute buffer -> occupied until 09:30.
+  // Second item starts at 09:00 -> inside the first item's buffer window.
+  const finding = checkItemOverlap({ startTime: '08:00', plannedDuration: 60, buffer: 30 }, { startTime: '09:00', plannedDuration: 30, buffer: 0 });
+  assert.ok(finding, 'the buffer makes this a genuine conflict even though the raw activity durations do not overlap');
+  assert.match(finding.message, /buffer/i);
+});
+
+await test('a second item starting exactly when the first\'s buffer window ends does not conflict', async () => {
+  const finding = checkItemOverlap({ startTime: '08:00', plannedDuration: 60, buffer: 30 }, { startTime: '09:30', plannedDuration: 30, buffer: 0 });
+  assert.equal(finding, null);
+});
+
+await test('checkItemOverlap is symmetric — argument order does not change the result', async () => {
+  const a = { startTime: '08:00', plannedDuration: 90, buffer: 15 };
+  const b = { startTime: '09:00', plannedDuration: 30, buffer: 0 };
+  assert.deepEqual(checkItemOverlap(a, b), checkItemOverlap(b, a));
+});
+
+await test('checkItemOverlap never throws and returns null when data is missing — no start time, or no duration on either item', async () => {
+  assert.equal(checkItemOverlap({ startTime: '', plannedDuration: 60 }, { startTime: '09:00', plannedDuration: 30 }), null);
+  assert.equal(checkItemOverlap({ startTime: '08:00', plannedDuration: null }, { startTime: '09:00', plannedDuration: 30 }), null);
+  assert.equal(checkItemOverlap({ startTime: '08:00', plannedDuration: 60 }, { startTime: '09:00', plannedDuration: null }), null);
+  assert.doesNotThrow(() => checkItemOverlap(null, { startTime: '09:00', plannedDuration: 30 }));
+});
+
+await test('an overlap exists between two real timeline items created in the same Planning/day, found via the actual store data', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-14' });
+  const batasiaLoop = await createTimelineItem(planning.id, 1, { itemType: 'custom', title: 'Batasia Loop', startTime: '08:00', plannedDuration: 90, buffer: 15 });
+  const breakfast = await createTimelineItem(planning.id, 1, { itemType: 'meal', title: 'Breakfast', startTime: '09:00', plannedDuration: 30 });
+  const finding = checkItemOverlap(batasiaLoop, breakfast);
+  assert.ok(finding, 'Batasia Loop (08:00-09:30 + 15min buffer = occupied until 09:45) genuinely overlaps Breakfast starting at 09:00');
+});
+
+console.log('\n56. Phase 1 — out-of-range day retention (presentation-only; no planningDays store introduced)');
+await test('shortening a Planning never deletes an out-of-range day\'s items, and planningDayDate still computes a real date for that day number for display purposes', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-14' }); // 5 days
+  const day5Item = await createTimelineItem(planning.id, 5, { itemType: 'custom', title: 'Rock Garden', startTime: '10:00', plannedDuration: 60 });
+
+  const shortened = await updatePlanning(planning.id, { endDate: '2026-01-12' }); // now 3 days; Day 5 is out of range
+  assert.equal(planningDayCount(shortened), 3);
+
+  const stillThere = await getTimelineItem(day5Item.id);
+  assert.ok(stillThere, 'Day 5\'s item was never deleted by shortening the trip');
+  assert.equal(stillThere.title, 'Rock Garden');
+
+  // The day is now beyond listPlanningDays()'s own range...
+  const currentDays = listPlanningDays(shortened);
+  assert.equal(currentDays.length, 3);
+  assert.ok(!currentDays.some(d => d.dayNumber === 5), 'Day 5 is not part of the current range');
+
+  // ...but planningDayDate() still computes a real date for it, which
+  // is exactly what the UI layer uses to render an out-of-range day
+  // card without needing a new planningDays store (see
+  // daysToRender() in PlanningDetailPage.jsx, a presentation-only
+  // function, not a data-model change).
+  const day5Date = planningDayDate(shortened, 5);
+  assert.equal(day5Date, '2026-01-14');
+});
+
+await test('extending a Planning back out, or re-lengthening it, naturally un-marks a previously out-of-range day with no special handling needed', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-14' });
+  await createTimelineItem(planning.id, 5, { itemType: 'custom', title: 'Rock Garden' });
+  const shortened = await updatePlanning(planning.id, { endDate: '2026-01-12' });
+  assert.equal(listPlanningDays(shortened).some(d => d.dayNumber === 5), false);
+
+  const lengthenedAgain = await updatePlanning(planning.id, { endDate: '2026-01-14' });
+  assert.equal(listPlanningDays(lengthenedAgain).some(d => d.dayNumber === 5), true, 'Day 5 is back in the current range purely because the dates say so — nothing needed to "move it back"');
+});
+
+console.log('\n57. Phase 1 — moving/reordering an item preserves all of its data');
+await test('moving an item to a different day (updateTimelineItem with dayNumber + startTime) preserves every other field untouched', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const attraction = await createAttraction(dest.id, { place: { name: 'Tiger Hill' }, feeBands: [{ id: 'adult', label: 'Adult', minAge: '', maxAge: '', status: 'paid', amount: '50', currency: 'INR' }] });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-14' });
+  const original = await createTimelineItem(planning.id, 1, {
+    itemType: 'attraction', researchRefType: 'attractions', researchRefId: attraction.id,
+    startTime: '04:30', plannedDuration: 90, buffer: 15, notes: 'Bring warm clothes', status: 'optional',
+    costSelections: { selectedFeeBandIds: ['adult'] },
+  });
+  const alt = await createItemAlternative(original.id, { title: 'Backup viewpoint', rank: 1 });
+
+  // The "move" operation itself — same store function every other edit uses.
+  const moved = await updateTimelineItem(original.id, { dayNumber: 3, startTime: '05:00' });
+
+  assert.equal(moved.id, original.id, 'the item keeps its identity — this is a move, not a delete+recreate');
+  assert.equal(moved.dayNumber, 3, 'moved to the new day');
+  assert.equal(moved.startTime, '05:00', 'moved to the new time');
+  // Everything else preserved exactly:
+  assert.equal(moved.researchRefType, 'attractions');
+  assert.equal(moved.researchRefId, attraction.id);
+  assert.equal(moved.plannedDuration, 90);
+  assert.equal(moved.buffer, 15);
+  assert.equal(moved.notes, 'Bring warm clothes');
+  assert.equal(moved.status, 'optional');
+  assert.deepEqual(moved.costSelections, { selectedFeeBandIds: ['adult'] });
+
+  // The item-level Alternative, stored separately, survives untouched
+  // and is still correctly linked to the same (moved) parent item.
+  const altsAfterMove = await listAlternativesForItem(moved.id);
+  assert.equal(altsAfterMove.length, 1);
+  assert.equal(altsAfterMove[0].id, alt.id);
+  assert.equal(altsAfterMove[0].title, 'Backup viewpoint');
+});
+
+await test('reordering within a day (changing only startTime) changes the item\'s position in listTimelineItemsForDay without touching anything else', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-14' });
+  const breakfast = await createTimelineItem(planning.id, 1, { itemType: 'meal', title: 'Breakfast', startTime: '08:00', notes: 'Hotel buffet' });
+  const walk = await createTimelineItem(planning.id, 1, { itemType: 'custom', title: 'Mall Road walk', startTime: '09:00' });
+
+  let dayOrder = await listTimelineItemsForDay(planning.id, 1);
+  assert.deepEqual(dayOrder.map(i => i.title), ['Breakfast', 'Mall Road walk']);
+
+  // "Reorder" Mall Road walk to be first by giving it an earlier time
+  // — the honest implementation per the data model: there is no
+  // separate position field, order IS time (see
+  // listTimelineItemsForDay in timelineItems.js).
+  const reordered = await updateTimelineItem(walk.id, { startTime: '07:30' });
+  assert.equal(reordered.notes, '', 'unrelated field (walk had no notes) stays as it was, not clobbered');
+
+  dayOrder = await listTimelineItemsForDay(planning.id, 1);
+  assert.deepEqual(dayOrder.map(i => i.title), ['Mall Road walk', 'Breakfast'], 'the order changed because the time changed, exactly reflecting the new schedule');
+  const breakfastAfter = await getTimelineItem(breakfast.id);
+  assert.equal(breakfastAfter.notes, 'Hotel buffet', 'the OTHER item was not touched by reordering the first one');
+});
+
+await test('an item belonging to an itinerary Option group keeps its optionGroupId/optionLabel when only its time is changed (time-only reorder, not a day move)', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-14' });
+  const group = await createOptionGroup(planning.id, { dayNumber: 2, partLabel: 'Morning' });
+  const item = await createTimelineItem(planning.id, 2, { itemType: 'custom', title: 'Toy train ride', optionGroupId: group.id, optionLabel: 'A', startTime: '07:00' });
+
+  const retimed = await updateTimelineItem(item.id, { startTime: '06:30' });
+  assert.equal(retimed.optionGroupId, group.id, 'still belongs to the same Option group');
+  assert.equal(retimed.optionLabel, 'A', 'still the same Option within that group');
+  assert.equal(retimed.dayNumber, 2, 'day unchanged — only the time moved');
+});
+
+console.log('\n58. Phase 1 — existing cost/validation/inclusion semantics remain fully intact (regression)');
+await test('opening-hours validation (Chunk 4) is unaffected by the Phase 1 overlap-detection addition', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const monastery = await createAttraction(dest.id, { place: { name: 'Ghum Monastery' }, openingHours: [{ id: '1', days: ['fri'], ranges: [{ start: '', end: '' }], closed: true }] });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-09', endDate: '2026-01-13' }); // Jan 9 2026 = Friday
+  const item = await createTimelineItem(planning.id, 1, { itemType: 'attraction', researchRefType: 'attractions', researchRefId: monastery.id, startTime: '10:00', plannedDuration: 60 });
+  const finding = checkOpeningHours({ item, record: monastery, weekdayKey: weekdayKeyForDate(planningDayDate(planning, 1)) });
+  assert.equal(finding.level, 'critical', 'closed-day detection still works exactly as before Phase 1');
+});
+
+await test('Option group inclusion/selection semantics (Chunk 3) are unaffected by Phase 1\'s chronological-merge presentation changes', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-14' });
+  const group = await createOptionGroup(planning.id, { dayNumber: 3, partLabel: 'Morning' });
+  const optionA = await createTimelineItem(planning.id, 3, { itemType: 'custom', title: 'Toy train', optionGroupId: group.id, optionLabel: 'A', startTime: '07:00' });
+  const optionB = await createTimelineItem(planning.id, 3, { itemType: 'custom', title: 'Monastery visit', optionGroupId: group.id, optionLabel: 'B', startTime: '07:00' });
+  await selectOption(group.id, 'A');
+  const refreshedGroup = await getOptionGroup(group.id);
+  assert.equal(refreshedGroup.selectedOptionLabel, 'A');
+  const stillB = await getTimelineItem(optionB.id);
+  assert.ok(stillB, 'unselected Option B item still exists, unaffected by Phase 1');
+  assert.ok(optionA);
+});
+
+await test('cost calculation and home-currency handling are unaffected by Phase 1', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  await setDestinationDefaultCurrency(dest.id, 'NPR');
+  await setHomeCurrency('INR');
+  await setExchangeRate('NPR', 'INR', 0.625);
+  const restaurant = await createRestaurantEntry(dest.id, { place: { name: 'Glenary\'s' }, price: { amount: '800', currency: 'INR', unit: '', note: '' } });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-14' });
+  await createTimelineItem(planning.id, 1, { itemType: 'meal', researchRefType: 'restaurants', researchRefId: restaurant.id });
+  const items = await listTimelineItems(planning.id);
+  const breakdown = calculatePlanningCostBreakdown({ items, alternatives: [], optionGroupsById: {}, travellerAges: [], getRecordForItem: () => restaurant });
+  assert.equal(breakdown.categoryTotals.food.INR, 800);
+  assert.equal(await getHomeCurrency(), 'INR');
+});
+
+await test('accommodation stay-range and traveller age calculations are unaffected by Phase 1', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const hotel = await createAccommodation(dest.id, { place: { name: 'Windamere' }, price: { amount: '6000', currency: 'INR', unit: '', note: '' } });
+  const adult = await createPerson({ name: 'Parent', dob: '1985-01-01' });
+  const child = await createPerson({ name: 'Child', dob: '2019-06-01' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-14', travellerIds: [adult.id, child.id] });
+  const stay = await createTimelineItem(planning.id, 1, { itemType: 'accommodation', researchRefType: 'accommodations', researchRefId: hotel.id, checkOutDayNumber: 4 });
+  assert.equal(nightsForAccommodationItem(stay), 3);
+  const people = await listPeople();
+  const ages = people.filter(p => planning.travellerIds.includes(p.id)).map(p => ageAsOf(p.dob, planning.startDate));
+  assert.deepEqual(ages.sort((a, b) => a - b), [6, 41]);
 });
 
 console.log(`\n=== ${passed} passed, ${failed} failed ===\n`);
