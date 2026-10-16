@@ -82,7 +82,19 @@ const DB_NAME = 'dossier';
 // purpose, per the explicit "do not use destination currency as home
 // currency" correction. Purely additive; no existing store, field, or
 // record changes.
-const DB_VERSION = 9;
+// v9 -> v10: added the `planningReviewFlags` store (Tour Planning,
+// Phase 2 — Must-see audit; see db/stores/planningReviewFlags.js).
+// This store was part of the originally approved Tour Planning design
+// (see the Chunk 3 design notes elsewhere in this codebase referring
+// to "the Must-see audit's own... design described in the approved
+// design, that audit is a later chunk") but was never actually
+// created until now. One row per Research attraction a person has
+// explicitly marked "Reviewed — intentionally not visiting" for one
+// specific Planning; absence of a row is the normal, unresolved state.
+// Indexed by planningId, same pattern as timelineItems/
+// planningOptionGroups. Purely additive; no existing store, field, or
+// record changes.
+const DB_VERSION = 10;
 
 // One object store per research section (each a genuinely distinct
 // shape defined in db/stores/*.js — never a shared "item_kind" bucket),
@@ -118,6 +130,7 @@ const STORE_DEFS = [
     indexes: [['intakeId', 'intakeId'], ['status', 'status'], ['destinationId', 'destinationId']],
   },
   { name: 'appSettings', keyPath: 'id', indexes: [] },
+  { name: 'planningReviewFlags', keyPath: 'id', indexes: [['planningId', 'planningId']] },
 ];
 
 // The stores that hold actual research entries (everything except

@@ -1,0 +1,25 @@
+.planning-card-summary {
+  margin-top: var(--space-1);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.planning-card-summary__attention {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--color-coral-dark);
+}
+
+.planning-card-summary__clear {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+.planning-card-summary__cost {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}

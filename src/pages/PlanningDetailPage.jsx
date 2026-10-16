@@ -1,11 +1,12 @@
 import { useState, useCallback, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { getPlanning, createPlanning, updatePlanning, deletePlanning, listPlanningDays } from '../db/stores/plannings';
+import { getPlanning, createPlanning, updatePlanning, deletePlanning, listPlanningDays, planningDayCount } from '../db/stores/plannings';
 import { listDestinations, getDestination } from '../db/stores/destinations';
 import { listPeople } from '../db/stores/people';
 import { listTimelineItems, createTimelineItem, updateTimelineItem, deleteTimelineItem, TIMELINE_ITEM_TYPES } from '../db/stores/timelineItems';
 import { listOptionGroupsForPlanning, createOptionGroup, selectOption, deleteOptionGroup } from '../db/stores/planningOptionGroups';
 import { listAlternativesForItem, createItemAlternative, updateItemAlternative, deleteItemAlternative } from '../db/stores/itemAlternatives';
+import { listReviewFlagsForPlanning, markReviewed, clearReviewFlag } from '../db/stores/planningReviewFlags';
 import { listAttractions } from '../db/stores/attractions';
 import { listRestaurantEntries, isPlaceBased } from '../db/stores/restaurants';
 import { listAccommodations } from '../db/stores/accommodations';
@@ -17,6 +18,7 @@ import {
   calculatePlanningCostBreakdown, convertTotalToHomeCurrency, COST_CATEGORIES,
   calculateAttractionCost, calculateRestaurantCost, calculateTransportCost, calculateAccommodationCost, calculateCustomItemCost,
 } from '../lib/planningCosts';
+import { auditMustSeeAttractions, buildNeedsAttention, summarizeNeedsAttention } from '../lib/planningAwareness';
 import { isFeeBandEmpty } from '../lib/feeBands';
 import { getCurrencyOptions, convertAmount, CORE_CURRENCIES } from '../db/currency';
 import { getHomeCurrency, setHomeCurrency } from '../db/appSettings';
@@ -125,10 +127,11 @@ export default function PlanningDetailPage() {
       isNew ? Promise.resolve(null) : getPlanning(planningId),
     ]);
     if (!isNew && !planning) throw new Error('Planning not found.');
-    const [destination, timelineItems, optionGroups] = await Promise.all([
+    const [destination, timelineItems, optionGroups, reviewFlags] = await Promise.all([
       planning ? getDestination(planning.destinationId) : Promise.resolve(null),
       planning ? listTimelineItems(planning.id) : Promise.resolve([]),
       planning ? listOptionGroupsForPlanning(planning.id) : Promise.resolve([]),
+      planning ? listReviewFlagsForPlanning(planning.id) : Promise.resolve([]),
     ]);
     // Research records referenced by timeline items/alternatives are
     // resolved here, once, for the whole page — never duplicated onto
@@ -159,14 +162,14 @@ export default function PlanningDetailPage() {
         alternativesByItemId[item.id] = await listAlternativesForItem(item.id);
       }));
     }
-    return { destinations, people, planning, destination, timelineItems, optionGroups, researchByTypeAndId, alternativesByItemId };
+    return { destinations, people, planning, destination, timelineItems, optionGroups, researchByTypeAndId, alternativesByItemId, reviewFlags };
   }, [planningId, isNew]);
   const { data, error, loading, refresh } = useCachedQuery(`planning:${planningId || 'new'}`, fetcher);
 
   if (error && !data) return <ErrorState description={error} onRetry={refresh} />;
   if (loading && !data) return <LoadingState label="Loading…" />;
 
-  const { destinations, people, planning, destination, timelineItems, optionGroups, researchByTypeAndId, alternativesByItemId } = data;
+  const { destinations, people, planning, destination, timelineItems, optionGroups, researchByTypeAndId, alternativesByItemId, reviewFlags } = data;
 
   // Traveller ages as of the Planning's start date — computed once here
   // and shared by the cost summary and the per-item cost editor, so
@@ -204,6 +207,18 @@ export default function PlanningDetailPage() {
         {!isNew && <Button variant="danger" onClick={handleDelete}>Delete Planning</Button>}
       </header>
 
+      {!isNew && (
+        <PlanningAttentionSummary
+          planning={planning}
+          timelineItems={timelineItems}
+          optionGroups={optionGroups}
+          alternativesByItemId={alternativesByItemId}
+          attractions={Object.values(researchByTypeAndId.attractions || {})}
+          reviewFlags={reviewFlags}
+          onReviewChange={afterTimelineChange}
+        />
+      )}
+
       <PlanningForm
         destinations={destinations}
         people={people}
@@ -239,6 +254,136 @@ export default function PlanningDetailPage() {
           alternativesByItemId={alternativesByItemId}
         />
       )}
+    </div>
+  );
+}
+
+// Planning self-awareness header — Tour Planning, Phase 2: "Is this
+// trip in good shape, and what still needs my attention?" Entirely
+// derived from already-loaded Planning data via
+// lib/planningAwareness.js — nothing here is a new status system or a
+// persisted aggregate; recomputed on every render, same as the cost
+// summary below it. Deliberately compact: a one-line count plus a
+// short breakdown, not a dashboard. A clean Planning shows a plain
+// positive state instead of an empty/absent section, so "nothing
+// needs attention" is a confirmed fact, not silence.
+function PlanningAttentionSummary({ planning, timelineItems, optionGroups, alternativesByItemId, attractions, reviewFlags, onReviewChange }) {
+  const [auditOpen, setAuditOpen] = useState(false);
+  const currentDayCount = planningDayCount(planning);
+  const attentionItems = buildNeedsAttention({
+    planning, timelineItems, optionGroups, alternativesByItemId, attractions, reviewFlags, currentDayCount,
+  });
+  const summary = summarizeNeedsAttention(attentionItems);
+  const hasWarnings = summary.totalWarnings > 0;
+  const hasAnything = hasWarnings || summary.outOfRange > 0;
+
+  if (!hasAnything) {
+    return (
+      <div className="planning-attention planning-attention--clear">
+        <p className="planning-attention__clear">✅ No outstanding issues</p>
+      </div>
+    );
+  }
+
+  const breakdown = [
+    summary.pendingOptions > 0 && `${summary.pendingOptions} choice${summary.pendingOptions === 1 ? '' : 's'} pending`,
+    summary.pendingAlternatives > 0 && `${summary.pendingAlternatives} alternative${summary.pendingAlternatives === 1 ? '' : 's'} to decide`,
+    summary.mustSeeUnresolved > 0 && `${summary.mustSeeUnresolved} Must-see to review`,
+    summary.conflicts > 0 && `${summary.conflicts} schedule conflict${summary.conflicts === 1 ? '' : 's'}`,
+    summary.outOfRange > 0 && `${summary.outOfRange} day${summary.outOfRange === 1 ? '' : 's'} outside trip dates`,
+  ].filter(Boolean);
+
+  return (
+    <div className="planning-attention">
+      <button type="button" className="planning-attention__toggle" onClick={() => setAuditOpen(o => !o)}>
+        {hasWarnings ? `⚠️ Needs attention: ${summary.totalWarnings}` : `ℹ️ ${summary.outOfRange} note${summary.outOfRange === 1 ? '' : 's'}`}
+      </button>
+      <ul className="planning-attention__breakdown">
+        {breakdown.map(line => <li key={line}>{line}</li>)}
+      </ul>
+
+      {auditOpen && (
+        <div className="planning-attention__details">
+          {attentionItems.filter(i => i.kind !== 'must_see_unresolved').map((item, i) => (
+            <p key={i} className={`planning-attention__item planning-attention__item--${item.severity}`}>
+              {item.dayNumber !== null ? `Day ${item.dayNumber} — ` : ''}{item.message}
+            </p>
+          ))}
+          <MustSeeAudit
+            planning={planning}
+            timelineItems={timelineItems}
+            optionGroups={optionGroups}
+            alternativesByItemId={alternativesByItemId}
+            attractions={attractions}
+            reviewFlags={reviewFlags}
+            onReviewChange={onReviewChange}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// The Must-see audit itself — Tour Planning, Phase 2. Lists every
+// Research attraction with visitPriority === 'must_see' for this
+// Planning's destination, alongside its current status, with an
+// explicit "Reviewed — intentionally not visiting" action for the
+// unresolved ones. Read-only for included/reviewed rows (nothing to
+// do there); the action only appears where it's actually meaningful.
+// Must-see audit applies to Attractions only, per the approved design
+// — this component never looks at any other Research section.
+function MustSeeAudit({ planning, timelineItems, optionGroups, alternativesByItemId, attractions, reviewFlags, onReviewChange }) {
+  const optionGroupsById = Object.fromEntries(optionGroups.map(g => [g.id, g]));
+  const audit = auditMustSeeAttractions({ attractions, timelineItems, alternativesByItemId, optionGroupsById, reviewFlags });
+  const [pending, setPending] = useState(null);
+
+  if (audit.length === 0) return null;
+
+  async function handleMarkReviewed(attractionId) {
+    setPending(attractionId);
+    try {
+      await markReviewed(planning.id, attractionId);
+      onReviewChange();
+    } finally {
+      setPending(null);
+    }
+  }
+
+  async function handleUnreview(flagId) {
+    setPending(flagId);
+    try {
+      await clearReviewFlag(flagId);
+      onReviewChange();
+    } finally {
+      setPending(null);
+    }
+  }
+
+  return (
+    <div className="must-see-audit">
+      <h3>Must-see attractions</h3>
+      <ul className="must-see-audit__list">
+        {audit.map(({ attraction, status, reviewFlag }) => (
+          <li key={attraction.id} className={`must-see-audit__row must-see-audit__row--${status}`}>
+            <span className="must-see-audit__name">{attraction.place?.name || 'Untitled attraction'}</span>
+            {status === 'included' && <span className="must-see-audit__status must-see-audit__status--included">Included</span>}
+            {status === 'reviewed' && (
+              <span className="must-see-audit__status must-see-audit__status--reviewed">
+                Reviewed — not visiting
+                <button type="button" className="must-see-audit__undo" disabled={pending === reviewFlag.id} onClick={() => handleUnreview(reviewFlag.id)}>Undo</button>
+              </span>
+            )}
+            {status === 'unresolved' && (
+              <span className="must-see-audit__status must-see-audit__status--unresolved">
+                ⚠️ Not included
+                <button type="button" className="must-see-audit__review" disabled={pending === attraction.id} onClick={() => handleMarkReviewed(attraction.id)}>
+                  Reviewed — not visiting
+                </button>
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

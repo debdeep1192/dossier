@@ -534,3 +534,139 @@
   color: var(--color-text-muted);
   font-style: italic;
 }
+
+/* Phase 2 — Planning self-awareness: Needs Attention summary and the
+   Must-see audit. Deliberately compact (a one-line toggle + a short
+   breakdown list), not a dashboard — expands only on tap to show
+   detail. Uses the same warning/info color language already
+   established elsewhere on this page (coral for warnings, muted text
+   for informational notes) rather than inventing a new severity
+   palette. */
+.planning-attention {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  margin-bottom: var(--space-4);
+  background: var(--color-surface);
+}
+
+.planning-attention--clear {
+  background: transparent;
+  border-style: dashed;
+}
+
+.planning-attention__clear {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+}
+
+.planning-attention__toggle {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  cursor: pointer;
+  padding: 0;
+  font-weight: 600;
+  font-size: var(--text-base);
+  color: var(--color-coral-dark);
+}
+
+.planning-attention__breakdown {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+}
+
+.planning-attention__details {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.planning-attention__item {
+  margin: 0;
+  font-size: var(--text-sm);
+}
+.planning-attention__item--warning { color: var(--color-coral-dark); }
+.planning-attention__item--info { color: var(--color-text-muted); }
+
+.must-see-audit {
+  margin-top: var(--space-3);
+}
+
+.must-see-audit h3 {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--color-text-muted);
+}
+
+.must-see-audit__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.must-see-audit__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  font-size: var(--text-sm);
+}
+
+.must-see-audit__name {
+  font-weight: 600;
+}
+
+.must-see-audit__status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+}
+
+.must-see-audit__status--included {
+  color: var(--color-teal);
+}
+
+.must-see-audit__status--reviewed {
+  color: var(--color-text-muted);
+}
+
+.must-see-audit__status--unresolved {
+  color: var(--color-coral-dark);
+  font-weight: 600;
+}
+
+.must-see-audit__review,
+.must-see-audit__undo {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  cursor: pointer;
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.must-see-audit__review:hover,
+.must-see-audit__undo:hover {
+  border-color: var(--color-teal);
+}

@@ -38,6 +38,8 @@ import { createOptionGroup, listOptionGroupsForPlanning, getOptionGroup, selectO
 import { createItemAlternative, listAlternativesForItem, getItemAlternative, updateItemAlternative, deleteItemAlternative } from '../stores/itemAlternatives.js';
 import { weekdayKeyForDate, checkOpeningHours, checkDuration, checkBestTime, validateTimelineItem, toMinutes, minutesToTime, itemEndTime, checkItemOverlap } from '../../lib/planningValidation.js';
 import { getHomeCurrency, setHomeCurrency } from '../appSettings.js';
+import { listReviewFlagsForPlanning, getReviewFlag, markReviewed, clearReviewFlag, getReviewFlagById } from '../stores/planningReviewFlags.js';
+import { auditMustSeeAttractions, buildNeedsAttention, summarizeNeedsAttention } from '../../lib/planningAwareness.js';
 import {
   isTimelineItemCurrentlyIncluded, isAlternativeCurrentlyIncluded, ageAsOf, ageQualifiesForBand,
   calculateAttractionCost, calculateRestaurantCost, calculateTransportCost, calculateAccommodationCost, calculateCustomItemCost,
@@ -3995,6 +3997,328 @@ await test('accommodation stay-range and traveller age calculations are unaffect
   const people = await listPeople();
   const ages = people.filter(p => planning.travellerIds.includes(p.id)).map(p => ageAsOf(p.dob, planning.startDate));
   assert.deepEqual(ages.sort((a, b) => a - b), [6, 41]);
+});
+
+console.log('\n59. planningReviewFlags store (Tour Planning, Phase 2 — Must-see audit review state)');
+await test('markReviewed creates a flag, is idempotent on a second call, and listReviewFlagsForPlanning returns it', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const attraction = await createAttraction(dest.id, { place: { name: 'Observatory Hill' }, visitPriority: 'must_see' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-14' });
+
+  const flag = await markReviewed(planning.id, attraction.id);
+  assert.ok(flag.id);
+  assert.equal(flag.planningId, planning.id);
+  assert.equal(flag.researchRefId, attraction.id);
+  assert.ok(flag.reviewedAt);
+
+  const again = await markReviewed(planning.id, attraction.id);
+  assert.equal(again.id, flag.id, 'marking reviewed twice does not create a duplicate row');
+
+  const flags = await listReviewFlagsForPlanning(planning.id);
+  assert.equal(flags.length, 1);
+});
+
+await test('markReviewed requires both a planningId and a researchRefId', async () => {
+  await assert.rejects(() => markReviewed(null, 'attr-1'), /planning/i);
+  await assert.rejects(() => markReviewed('planning-1', null), /research/i);
+});
+
+await test('getReviewFlag finds the right flag for a planning+attraction pair, and null when none exists', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const attraction = await createAttraction(dest.id, { place: { name: 'Observatory Hill' } });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-14' });
+  assert.equal(await getReviewFlag(planning.id, attraction.id), null);
+  await markReviewed(planning.id, attraction.id);
+  const found = await getReviewFlag(planning.id, attraction.id);
+  assert.equal(found.researchRefId, attraction.id);
+});
+
+await test('clearReviewFlag soft-deletes a flag, which then no longer appears in listReviewFlagsForPlanning', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const attraction = await createAttraction(dest.id, { place: { name: 'Observatory Hill' } });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-14' });
+  const flag = await markReviewed(planning.id, attraction.id);
+  await clearReviewFlag(flag.id);
+  assert.equal(await getReviewFlagById(flag.id), null);
+  assert.equal((await listReviewFlagsForPlanning(planning.id)).length, 0);
+});
+
+await test('review flags are scoped per Planning — reviewing an attraction for one Planning does not affect another', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const attraction = await createAttraction(dest.id, { place: { name: 'Observatory Hill' } });
+  const planningA = await createPlanning(dest.id, { name: 'Trip A', startDate: '2026-01-10', endDate: '2026-01-14' });
+  const planningB = await createPlanning(dest.id, { name: 'Trip B', startDate: '2026-06-01', endDate: '2026-06-05' });
+  await markReviewed(planningA.id, attraction.id);
+  assert.ok(await getReviewFlag(planningA.id, attraction.id));
+  assert.equal(await getReviewFlag(planningB.id, attraction.id), null, 'Planning B is unaffected');
+});
+
+console.log('\n60. Must-see audit — all 8 required scenarios (lib/planningAwareness.js)');
+await test('1. Must-see included in the current itinerary -> no warning', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const attraction = await createAttraction(dest.id, { place: { name: 'Tiger Hill' }, visitPriority: 'must_see' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-14' });
+  await createTimelineItem(planning.id, 1, { itemType: 'attraction', researchRefType: 'attractions', researchRefId: attraction.id, startTime: '04:30' });
+
+  const timelineItems = await listTimelineItems(planning.id);
+  const audit = auditMustSeeAttractions({ attractions: [attraction], timelineItems, alternativesByItemId: {}, optionGroupsById: {}, reviewFlags: [] });
+  assert.equal(audit[0].status, 'included');
+});
+
+await test('2. Must-see NOT included and not reviewed -> warning', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const attraction = await createAttraction(dest.id, { place: { name: 'Tiger Hill' }, visitPriority: 'must_see' });
+  const audit = auditMustSeeAttractions({ attractions: [attraction], timelineItems: [], alternativesByItemId: {}, optionGroupsById: {}, reviewFlags: [] });
+  assert.equal(audit[0].status, 'unresolved');
+});
+
+await test('3. Must-see reviewed — intentionally not visiting -> no warning', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const attraction = await createAttraction(dest.id, { place: { name: 'Tiger Hill' }, visitPriority: 'must_see' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-14' });
+  await markReviewed(planning.id, attraction.id);
+  const reviewFlags = await listReviewFlagsForPlanning(planning.id);
+  const audit = auditMustSeeAttractions({ attractions: [attraction], timelineItems: [], alternativesByItemId: {}, optionGroupsById: {}, reviewFlags });
+  assert.equal(audit[0].status, 'reviewed');
+});
+
+await test('4. Removing/deselecting a previously included Must-see reopens the warning unless reviewed', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const attraction = await createAttraction(dest.id, { place: { name: 'Tiger Hill' }, visitPriority: 'must_see' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-14' });
+  const group = await createOptionGroup(planning.id, { dayNumber: 1, partLabel: 'Morning' });
+  const item = await createTimelineItem(planning.id, 1, { itemType: 'attraction', researchRefType: 'attractions', researchRefId: attraction.id, optionGroupId: group.id, optionLabel: 'A' });
+  await createTimelineItem(planning.id, 1, { itemType: 'custom', title: 'Other activity', optionGroupId: group.id, optionLabel: 'B' });
+  await selectOption(group.id, 'A');
+
+  let timelineItems = await listTimelineItems(planning.id);
+  let groupsById = Object.fromEntries((await listOptionGroupsForPlanning(planning.id)).map(g => [g.id, g]));
+  let audit = auditMustSeeAttractions({ attractions: [attraction], timelineItems, alternativesByItemId: {}, optionGroupsById: groupsById, reviewFlags: [] });
+  assert.equal(audit[0].status, 'included', 'Option A (the Must-see) is selected');
+
+  // Deselect — switch to Option B instead.
+  await selectOption(group.id, 'B');
+  groupsById = Object.fromEntries((await listOptionGroupsForPlanning(planning.id)).map(g => [g.id, g]));
+  audit = auditMustSeeAttractions({ attractions: [attraction], timelineItems, alternativesByItemId: {}, optionGroupsById: groupsById, reviewFlags: [] });
+  assert.equal(audit[0].status, 'unresolved', 'the warning reopens once no longer included, since it was never reviewed');
+
+  // But if it HAD been reviewed, deselecting does not reopen a warning.
+  await markReviewed(planning.id, attraction.id);
+  const reviewFlags = await listReviewFlagsForPlanning(planning.id);
+  audit = auditMustSeeAttractions({ attractions: [attraction], timelineItems, alternativesByItemId: {}, optionGroupsById: groupsById, reviewFlags });
+  assert.equal(audit[0].status, 'reviewed');
+  assert.ok(item.id);
+});
+
+await test('5. Must-see inside an UNSELECTED itinerary option still requires review (not counted as included)', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const attraction = await createAttraction(dest.id, { place: { name: 'Tiger Hill' }, visitPriority: 'must_see' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-14' });
+  const group = await createOptionGroup(planning.id, { dayNumber: 1, partLabel: 'Morning' });
+  await createTimelineItem(planning.id, 1, { itemType: 'attraction', researchRefType: 'attractions', researchRefId: attraction.id, optionGroupId: group.id, optionLabel: 'B' });
+  await createTimelineItem(planning.id, 1, { itemType: 'custom', title: 'Other', optionGroupId: group.id, optionLabel: 'A' });
+  await selectOption(group.id, 'A'); // Must-see is in B, not selected
+
+  const timelineItems = await listTimelineItems(planning.id);
+  const groupsById = Object.fromEntries((await listOptionGroupsForPlanning(planning.id)).map(g => [g.id, g]));
+  const audit = auditMustSeeAttractions({ attractions: [attraction], timelineItems, alternativesByItemId: {}, optionGroupsById: groupsById, reviewFlags: [] });
+  assert.equal(audit[0].status, 'unresolved');
+});
+
+await test('6. An item alternative inside an unselected option does NOT count as included', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const attraction = await createAttraction(dest.id, { place: { name: 'Tiger Hill' }, visitPriority: 'must_see' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-14' });
+  const group = await createOptionGroup(planning.id, { dayNumber: 1, partLabel: 'Morning' });
+  const itemInB = await createTimelineItem(planning.id, 1, { itemType: 'custom', title: 'Slot B', optionGroupId: group.id, optionLabel: 'B' });
+  await createTimelineItem(planning.id, 1, { itemType: 'custom', title: 'Slot A', optionGroupId: group.id, optionLabel: 'A' });
+  const alt = await createItemAlternative(itemInB.id, { researchRefType: 'attractions', researchRefId: attraction.id, selected: true });
+  await selectOption(group.id, 'A');
+
+  const timelineItems = await listTimelineItems(planning.id);
+  const groupsById = Object.fromEntries((await listOptionGroupsForPlanning(planning.id)).map(g => [g.id, g]));
+  const alternativesByItemId = { [itemInB.id]: [alt] };
+  const audit = auditMustSeeAttractions({ attractions: [attraction], timelineItems, alternativesByItemId, optionGroupsById: groupsById, reviewFlags: [] });
+  assert.equal(audit[0].status, 'unresolved', 'the alternative is selected, but its parent item sits in the unselected Option B');
+});
+
+await test('7. A selected/current alternative correctly counts as included', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const attraction = await createAttraction(dest.id, { place: { name: 'Tiger Hill' }, visitPriority: 'must_see' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-14' });
+  const item = await createTimelineItem(planning.id, 1, { itemType: 'custom', title: 'Morning activity' });
+  const alt = await createItemAlternative(item.id, { researchRefType: 'attractions', researchRefId: attraction.id, selected: true });
+
+  const timelineItems = await listTimelineItems(planning.id);
+  const alternativesByItemId = { [item.id]: [alt] };
+  const audit = auditMustSeeAttractions({ attractions: [attraction], timelineItems, alternativesByItemId, optionGroupsById: {}, reviewFlags: [] });
+  assert.equal(audit[0].status, 'included', 'an ordinary (always-included) item\'s selected alternative counts');
+});
+
+await test('8. Both Planned and Optional status count as included when in the current itinerary context', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const attractionPlanned = await createAttraction(dest.id, { place: { name: 'Tiger Hill' }, visitPriority: 'must_see' });
+  const attractionOptional = await createAttraction(dest.id, { place: { name: 'Ghum Monastery' }, visitPriority: 'must_see' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-14' });
+  await createTimelineItem(planning.id, 1, { itemType: 'attraction', researchRefType: 'attractions', researchRefId: attractionPlanned.id, status: 'planned' });
+  await createTimelineItem(planning.id, 1, { itemType: 'attraction', researchRefType: 'attractions', researchRefId: attractionOptional.id, status: 'optional' });
+
+  const timelineItems = await listTimelineItems(planning.id);
+  const audit = auditMustSeeAttractions({ attractions: [attractionPlanned, attractionOptional], timelineItems, alternativesByItemId: {}, optionGroupsById: {}, reviewFlags: [] });
+  assert.equal(audit.find(a => a.attraction.id === attractionPlanned.id).status, 'included');
+  assert.equal(audit.find(a => a.attraction.id === attractionOptional.id).status, 'included', 'Optional status still counts as included');
+});
+
+await test('Must-see audit applies to Attractions only — a maybe/skippable attraction is never included in the audit list', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const mustSee = await createAttraction(dest.id, { place: { name: 'Tiger Hill' }, visitPriority: 'must_see' });
+  const maybe = await createAttraction(dest.id, { place: { name: 'Mall Road' }, visitPriority: 'maybe' });
+  const skippable = await createAttraction(dest.id, { place: { name: 'Souvenir shop' }, visitPriority: 'skippable' });
+  const noPriority = await createAttraction(dest.id, { place: { name: 'Unreviewed spot' } });
+  const audit = auditMustSeeAttractions({ attractions: [mustSee, maybe, skippable, noPriority], timelineItems: [], alternativesByItemId: {}, optionGroupsById: {}, reviewFlags: [] });
+  assert.equal(audit.length, 1, 'only the must_see attraction appears in the audit at all');
+  assert.equal(audit[0].attraction.id, mustSee.id);
+});
+
+await test('14. A soft-deleted Must-see attraction does not create a warning, since listAttractions already excludes it', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const attraction = await createAttraction(dest.id, { place: { name: 'Tiger Hill' }, visitPriority: 'must_see' });
+  await deleteAttraction(attraction.id);
+  // This mirrors exactly what the real UI does: audit against
+  // listAttractions()'s own output, which already excludes soft-deleted
+  // records (see crud.js's listActive) — nothing extra is needed here.
+  const activeAttractions = await listAttractions(dest.id);
+  assert.equal(activeAttractions.length, 0, 'the soft-deleted attraction is excluded by the normal Research list function');
+  const audit = auditMustSeeAttractions({ attractions: activeAttractions, timelineItems: [], alternativesByItemId: {}, optionGroupsById: {}, reviewFlags: [] });
+  assert.equal(audit.length, 0, 'no audit entry at all for a soft-deleted attraction, so it can never produce a warning');
+});
+
+console.log('\n61. Needs Attention aggregation (lib/planningAwareness.js)');
+await test('9. An unresolved itinerary Option appears in Needs Attention', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-14' });
+  await createOptionGroup(planning.id, { dayNumber: 2, partLabel: 'Morning' });
+  const optionGroups = await listOptionGroupsForPlanning(planning.id);
+  const attention = buildNeedsAttention({ timelineItems: [], optionGroups, alternativesByItemId: {}, attractions: [], reviewFlags: [], currentDayCount: 5 });
+  assert.equal(attention.filter(a => a.kind === 'option_pending').length, 1);
+  assert.equal(attention[0].dayNumber, 2);
+});
+
+await test('10. An unresolved item-level alternative appears in Needs Attention (only when its parent item is currently included)', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-14' });
+  const item = await createTimelineItem(planning.id, 1, { itemType: 'meal', title: 'Lunch' });
+  const alt1 = await createItemAlternative(item.id, { title: 'Restaurant A', selected: false });
+  const alt2 = await createItemAlternative(item.id, { title: 'Restaurant B', selected: false });
+  const timelineItems = await listTimelineItems(planning.id);
+  const alternativesByItemId = { [item.id]: [alt1, alt2] };
+  const attention = buildNeedsAttention({ timelineItems, optionGroups: [], alternativesByItemId, attractions: [], reviewFlags: [], currentDayCount: 5 });
+  assert.equal(attention.filter(a => a.kind === 'alternative_pending').length, 1);
+});
+
+await test('11. A genuine schedule conflict appears in Needs Attention', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-14' });
+  await createTimelineItem(planning.id, 1, { itemType: 'custom', title: 'Sunrise viewpoint', startTime: '08:00', plannedDuration: 90, buffer: 0 });
+  await createTimelineItem(planning.id, 1, { itemType: 'meal', title: 'Breakfast', startTime: '09:00', plannedDuration: 30, buffer: 0 });
+  const timelineItems = await listTimelineItems(planning.id);
+  const attention = buildNeedsAttention({ timelineItems, optionGroups: [], alternativesByItemId: {}, attractions: [], reviewFlags: [], currentDayCount: 5 });
+  assert.equal(attention.filter(a => a.kind === 'schedule_conflict').length, 1);
+});
+
+await test('12. A normal schedule gap does NOT appear as an issue', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-14' });
+  await createTimelineItem(planning.id, 1, { itemType: 'custom', title: 'Morning activity', startTime: '08:00', plannedDuration: 60, buffer: 0 });
+  await createTimelineItem(planning.id, 1, { itemType: 'meal', title: 'Lunch', startTime: '13:00', plannedDuration: 60, buffer: 0 });
+  const timelineItems = await listTimelineItems(planning.id);
+  const attention = buildNeedsAttention({ timelineItems, optionGroups: [], alternativesByItemId: {}, attractions: [], reviewFlags: [], currentDayCount: 5 });
+  assert.equal(attention.filter(a => a.kind === 'schedule_conflict').length, 0, 'a 4-hour gap is free time, not a problem');
+});
+
+await test('13. Content on a day outside the current trip dates appears in Needs Attention as informational, not a warning', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-12' }); // 3 days
+  await createTimelineItem(planning.id, 5, { itemType: 'custom', title: 'Rock Garden' }); // beyond the 3-day range
+  const timelineItems = await listTimelineItems(planning.id);
+  const attention = buildNeedsAttention({ timelineItems, optionGroups: [], alternativesByItemId: {}, attractions: [], reviewFlags: [], currentDayCount: planningDayCount(planning) });
+  const outOfRangeItems = attention.filter(a => a.kind === 'out_of_range');
+  assert.equal(outOfRangeItems.length, 1);
+  assert.equal(outOfRangeItems[0].severity, 'info', 'out-of-range content is informational, never a warning');
+  const summary = summarizeNeedsAttention(attention);
+  assert.equal(summary.totalWarnings, 0, 'out-of-range content never counts toward the warning total');
+});
+
+await test('an unresolved Option\'s items do not ALSO generate a separate alternative_pending entry for items inside it', async () => {
+  // Guards against double-surfacing the same underlying "this part of
+  // the trip is undecided" fact as two different attention items.
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-14' });
+  const group = await createOptionGroup(planning.id, { dayNumber: 1, partLabel: 'Morning' });
+  const itemInB = await createTimelineItem(planning.id, 1, { itemType: 'meal', title: 'Lunch (B)', optionGroupId: group.id, optionLabel: 'B' });
+  await createTimelineItem(planning.id, 1, { itemType: 'custom', title: 'A', optionGroupId: group.id, optionLabel: 'A' });
+  await createItemAlternative(itemInB.id, { title: 'Alt restaurant', selected: false });
+  await selectOption(group.id, 'A');
+
+  const timelineItems = await listTimelineItems(planning.id);
+  const optionGroups = await listOptionGroupsForPlanning(planning.id);
+  const alternativesByItemId = { [itemInB.id]: await listAlternativesForItem(itemInB.id) };
+  const attention = buildNeedsAttention({ timelineItems, optionGroups, alternativesByItemId, attractions: [], reviewFlags: [], currentDayCount: 5 });
+  assert.equal(attention.filter(a => a.kind === 'alternative_pending').length, 0, 'itemInB is not currently included (Option B is not selected), so its unresolved alternative is not separately flagged');
+});
+
+console.log('\n62. Planning cost calculation remains unchanged, and missing prices are never treated as zero (regression)');
+await test('16. Existing cost calculation is unaffected by Phase 2, and a missing Research price is never silently zero', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const restaurantWithPrice = await createRestaurantEntry(dest.id, { place: { name: 'Glenary\'s' }, price: { amount: '800', currency: 'INR', unit: '', note: '' } });
+  const restaurantNoPrice = await createRestaurantEntry(dest.id, { place: { name: 'Unpriced cafe' } });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-14' });
+  await createTimelineItem(planning.id, 1, { itemType: 'meal', researchRefType: 'restaurants', researchRefId: restaurantWithPrice.id });
+  await createTimelineItem(planning.id, 1, { itemType: 'meal', researchRefType: 'restaurants', researchRefId: restaurantNoPrice.id });
+
+  const timelineItems = await listTimelineItems(planning.id);
+  const records = { [restaurantWithPrice.id]: restaurantWithPrice, [restaurantNoPrice.id]: restaurantNoPrice };
+  const breakdown = calculatePlanningCostBreakdown({
+    items: timelineItems, alternatives: [], optionGroupsById: {}, travellerAges: [],
+    getRecordForItem: (item) => records[item.researchRefId],
+  });
+  assert.equal(breakdown.categoryTotals.food.INR, 800, 'only the priced restaurant contributes');
+  assert.equal(breakdown.unestimatedItems.length, 1, 'the un-priced restaurant is tracked as not-estimated');
+  assert.equal(breakdown.unestimatedItems[0].category, 'food');
+});
+
+console.log('\n63. Planning list summary reflects derived state correctly (15)');
+await test('15. buildNeedsAttention + summarizeNeedsAttention, run the same way the Plannings list page runs them, correctly reflect a Planning\'s actual state', async () => {
+  const dest = await createDestination({ name: 'Darjeeling' });
+  const mustSee = await createAttraction(dest.id, { place: { name: 'Tiger Hill' }, visitPriority: 'must_see' });
+  const planning = await createPlanning(dest.id, { name: 'Trip', startDate: '2026-01-10', endDate: '2026-01-12' });
+  await createOptionGroup(planning.id, { dayNumber: 1, partLabel: 'Morning' }); // 1 pending option
+  await createTimelineItem(planning.id, 5, { itemType: 'custom', title: 'Out of range item' }); // 1 out-of-range day (3-day trip)
+
+  const timelineItems = await listTimelineItems(planning.id);
+  const optionGroups = await listOptionGroupsForPlanning(planning.id);
+  const attention = buildNeedsAttention({
+    timelineItems, optionGroups, alternativesByItemId: {}, attractions: [mustSee], reviewFlags: [], currentDayCount: planningDayCount(planning),
+  });
+  const summary = summarizeNeedsAttention(attention);
+  assert.equal(summary.pendingOptions, 1);
+  assert.equal(summary.mustSeeUnresolved, 1, 'the must-see Tiger Hill is not referenced anywhere -> unresolved');
+  assert.equal(summary.outOfRange, 1);
+  assert.equal(summary.totalWarnings, 2, 'pendingOptions + mustSeeUnresolved; outOfRange never counts toward warnings');
+
+  // Now satisfy both warnings and confirm the summary updates correctly.
+  await createTimelineItem(planning.id, 1, { itemType: 'attraction', researchRefType: 'attractions', researchRefId: mustSee.id });
+  await selectOption(optionGroups[0].id, 'A');
+  const updatedItems = await listTimelineItems(planning.id);
+  const updatedGroups = await listOptionGroupsForPlanning(planning.id);
+  const updatedAttention = buildNeedsAttention({
+    timelineItems: updatedItems, optionGroups: updatedGroups, alternativesByItemId: {}, attractions: [mustSee], reviewFlags: [], currentDayCount: planningDayCount(planning),
+  });
+  const updatedSummary = summarizeNeedsAttention(updatedAttention);
+  assert.equal(updatedSummary.pendingOptions, 0);
+  assert.equal(updatedSummary.mustSeeUnresolved, 0);
+  assert.equal(updatedSummary.totalWarnings, 0);
+  assert.equal(updatedSummary.outOfRange, 1, 'out-of-range content remains, independent of the warnings being resolved');
 });
 
 console.log(`\n=== ${passed} passed, ${failed} failed ===\n`);
