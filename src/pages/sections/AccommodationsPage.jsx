@@ -10,6 +10,9 @@ import SectionPageLayout from '../../components/SectionPageLayout';
 import Card from '../../components/Card';
 import Button from '../../components/Button';
 import Modal from '../../components/Modal';
+import PlanningUsage from '../../components/PlanningUsage';
+import { ResearchUnavailableNotice } from '../../components/ResearchSummary';
+import { useOpenRecordFromUrl } from '../../hooks/useOpenRecordFromUrl';
 import { Input, TextArea } from '../../components/Field';
 import { PlaceField, PlaceSummary } from '../../components/Place';
 import { MoneyField, MoneyDisplay } from '../../components/Money';
@@ -35,6 +38,9 @@ export default function AccommodationsPage() {
     return { destination, items: rawItems.map(normalizeAccommodation), locations };
   }, [destinationId]);
   const { data, error, loading, refresh } = useCachedQuery(`accommodations:${destinationId}`, fetcher);
+  // Phase 3: Planning links here with ?open=<id> to open this exact
+  // record's existing edit modal (see hooks/useOpenRecordFromUrl.js).
+  const { unavailable: openUnavailable, dismissUnavailable } = useOpenRecordFromUrl({ records: data?.items, onOpen: setEditing });
 
   function afterMutation() {
     invalidateCachedQuery(`accommodations:${destinationId}`);
@@ -65,6 +71,7 @@ export default function AccommodationsPage() {
 
   return (
     <SectionPageLayout destination={destination} destinationId={destinationId} locationLabel={contextLocation?.name} title="Accommodation">
+      {openUnavailable && <ResearchUnavailableNotice onDismiss={dismissUnavailable} />}
       {visibleItems.length === 0 ? (
         <EmptyState icon="🛏️" title="No accommodation yet" description="Use the + button below to add hotels, guesthouses, or homestays you're researching." />
       ) : (
@@ -159,6 +166,7 @@ function AccommodationForm({ destinationId, destinationName, record, currencies,
   return (
     <Modal open onClose={onClose} title={record ? 'Edit Accommodation' : 'New Accommodation'}>
       <form onSubmit={handleSubmit}>
+        {record && <PlanningUsage destinationId={destinationId} researchRefType="accommodations" researchRefId={record.id} />}
         <PlaceField
           value={place}
           onChange={setPlace}

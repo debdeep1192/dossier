@@ -28,6 +28,7 @@ import Card from '../components/Card';
 import Button from '../components/Button';
 import Modal from '../components/Modal';
 import ResearchPicker from '../components/ResearchPicker';
+import { ResearchContextProvider, ResearchInfoButton } from '../components/ResearchSummary';
 import { Input, TextArea, Select, Checkbox } from '../components/Field';
 import { LoadingState, ErrorState } from '../components/States';
 import './PlanningDetailPage.css';
@@ -232,17 +233,23 @@ export default function PlanningDetailPage() {
       />
 
       {!isNew && (
-        <DaysTimeline
-          planning={planning}
-          destinationId={destination?.id}
-          timelineItems={timelineItems}
-          optionGroups={optionGroups}
-          researchByTypeAndId={researchByTypeAndId}
-          travellerAges={travellerAges}
-          currencyOptions={currencyOptions}
-          alternativesByItemId={alternativesByItemId}
-          onChange={afterTimelineChange}
-        />
+        // Phase 3: lets any Research-linked item below (timeline rows,
+        // the item form, alternatives) open its Research summary popup
+        // knowing which destination it belongs to, without threading
+        // the destination through every component's props.
+        <ResearchContextProvider value={{ destinationId: destination?.id || null, destinationName: destination?.name || '' }}>
+          <DaysTimeline
+            planning={planning}
+            destinationId={destination?.id}
+            timelineItems={timelineItems}
+            optionGroups={optionGroups}
+            researchByTypeAndId={researchByTypeAndId}
+            travellerAges={travellerAges}
+            currencyOptions={currencyOptions}
+            alternativesByItemId={alternativesByItemId}
+            onChange={afterTimelineChange}
+          />
+        </ResearchContextProvider>
       )}
 
       {!isNew && (
@@ -1112,6 +1119,9 @@ function TimelineItemRow({ item, researchByTypeAndId, travellerAges, weekdayKey,
         )}
       </div>
       <div className="planning-item__actions">
+        {item.researchRefId && (
+          <ResearchInfoButton researchRefType={item.researchRefType} researchRefId={item.researchRefId} record={referencedRecord} />
+        )}
         <button type="button" className="planning-item__move" onClick={(e) => { e.stopPropagation(); onMove(); }}>Move</button>
         <button type="button" className="entry-card__delete" onClick={(e) => { e.stopPropagation(); onDelete(); }}>Delete</button>
       </div>
@@ -1372,7 +1382,10 @@ function TimelineItemForm({ planningId, destinationId, dayNumber, partLabel, opt
           {researchRef ? (
             <div className="timeline-item-form__ref">
               <span className="timeline-item-form__ref-label">{researchRef.label}</span>
-              <button type="button" className="entry-card__delete" onClick={clearResearchRef}>Remove</button>
+              <span>
+                <ResearchInfoButton researchRefType={researchRef.researchRefType} researchRefId={researchRef.researchRefId} record={currentRecord} />
+                <button type="button" className="entry-card__delete" onClick={clearResearchRef}>Remove</button>
+              </span>
             </div>
           ) : (
             <>
@@ -1675,6 +1688,9 @@ function ItemAlternativesPanel({ timelineItemId, destinationId, researchByTypeAn
                   )}
                 </div>
                 <div className="item-alternatives__actions">
+                  {alt.researchRefId && (
+                    <ResearchInfoButton researchRefType={alt.researchRefType} researchRefId={alt.researchRefId} record={referencedRecord} />
+                  )}
                   <button type="button" className="item-alternatives__edit" onClick={() => setEditingAlt(alt)}>Edit</button>
                   <button type="button" className="entry-card__delete" onClick={() => handleDelete(alt)}>Delete</button>
                 </div>
@@ -1779,7 +1795,10 @@ function ItemAlternativeForm({ timelineItemId, destinationId, record, researchBy
           {researchRef ? (
             <div className="timeline-item-form__ref">
               <span className="timeline-item-form__ref-label">{researchRef.label}</span>
-              <button type="button" className="entry-card__delete" onClick={clearResearchRef}>Remove</button>
+              <span>
+                <ResearchInfoButton researchRefType={researchRef.researchRefType} researchRefId={researchRef.researchRefId} record={currentRecord} />
+                <button type="button" className="entry-card__delete" onClick={clearResearchRef}>Remove</button>
+              </span>
             </div>
           ) : (
             <>

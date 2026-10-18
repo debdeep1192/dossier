@@ -1,0 +1,174 @@
+.research-summary {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+
+.research-summary__badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.research-summary__subtitle {
+  margin: 0;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.research-summary__location {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+}
+
+.research-summary__facts {
+  margin: var(--space-1) 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.research-summary__fact {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.research-summary__fact dt {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--color-text-muted);
+}
+
+.research-summary__fact dd {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
+
+.research-summary__actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.research-summary__open {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-teal-dark);
+}
+
+.research-summary__unavailable {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+}
+
+.research-info-button {
+  border: none;
+  background: transparent;
+  color: var(--color-teal);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  cursor: pointer;
+  padding: var(--space-1) var(--space-2);
+  white-space: nowrap;
+}
+.research-info-button:hover { text-decoration: underline; }
+
+.research-unavailable-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-sage);
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+}
+
+.research-unavailable-notice__dismiss {
+  border: none;
+  background: none;
+  font-size: 1.25rem;
+  line-height: 1;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+/* Reverse references — "Used in Plannings" panel inside a Research
+   entry's edit modal. */
+.planning-usage {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-sage);
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.planning-usage__title {
+  margin: 0 0 var(--space-1);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--color-text-muted);
+}
+
+.planning-usage__empty {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+}
+
+.planning-usage__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.planning-usage__row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.planning-usage__line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.planning-usage__link {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-teal-dark);
+}
+
+.planning-usage__status {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-full);
+  white-space: nowrap;
+}
+.planning-usage__status--included { background: #E4F2EF; color: var(--color-teal-dark); }
+.planning-usage__status--referenced { background: var(--color-neutral-200); color: var(--color-text-secondary); }
+
+.planning-usage__detail {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}

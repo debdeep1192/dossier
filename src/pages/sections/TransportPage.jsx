@@ -11,6 +11,9 @@ import SectionPageLayout from '../../components/SectionPageLayout';
 import Card from '../../components/Card';
 import Button from '../../components/Button';
 import Modal from '../../components/Modal';
+import PlanningUsage from '../../components/PlanningUsage';
+import { ResearchUnavailableNotice } from '../../components/ResearchSummary';
+import { useOpenRecordFromUrl } from '../../hooks/useOpenRecordFromUrl';
 import { Input, TextArea, Select } from '../../components/Field';
 import { MoneyField, MoneyDisplay } from '../../components/Money';
 import { EmptyState, LoadingState, ErrorState } from '../../components/States';
@@ -36,6 +39,9 @@ export default function TransportPage() {
     return { destination, locations, journeys, items: rawItems.map(normalizeTransportEntry) };
   }, [destinationId]);
   const { data, error, loading, refresh } = useCachedQuery(`transport:${destinationId}`, fetcher);
+  // Phase 3: Planning links here with ?open=<id> to open this exact
+  // record's existing edit modal (see hooks/useOpenRecordFromUrl.js).
+  const { unavailable: openUnavailable, dismissUnavailable } = useOpenRecordFromUrl({ records: data?.items, onOpen: setEditing });
 
   function afterMutation() {
     invalidateCachedQuery(`transport:${destinationId}`);
@@ -67,6 +73,7 @@ export default function TransportPage() {
 
   return (
     <SectionPageLayout destination={destination} destinationId={destinationId} locationLabel={contextLocation?.name} title="Transport">
+      {openUnavailable && <ResearchUnavailableNotice onDismiss={dismissUnavailable} />}
       {visibleItems.length === 0 ? (
         <EmptyState icon="🚌" title="No transport yet" description="Use the + button below to add how to get between places, or how to get around locally — buses, trains, flights, taxis, local apps." />
       ) : (
@@ -206,6 +213,7 @@ function TransportForm({ destinationId, record, currencies, defaultCurrency, loc
   return (
     <Modal open onClose={onClose} title={record ? 'Edit Transport' : 'New Transport'}>
       <form onSubmit={handleSubmit}>
+        {record && <PlanningUsage destinationId={destinationId} researchRefType="transport" researchRefId={record.id} />}
         <Select label="Type" value={travelType} onChange={e => setTravelType(e.target.value)}>
           <option value="inter_city">Inter-city / route (From → To)</option>
           <option value="local">Local transport (getting around one place)</option>

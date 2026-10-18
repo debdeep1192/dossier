@@ -1,10 +1,12 @@
 import { useState, useMemo, useCallback } from 'react';
 import { listAttractions } from '../db/stores/attractions';
-import { listRestaurantEntries, isPlaceBased } from '../db/stores/restaurants';
+import { listRestaurantEntries } from '../db/stores/restaurants';
 import { listAccommodations } from '../db/stores/accommodations';
 import { listTransportEntries } from '../db/stores/transport';
 import { useCachedQuery } from '../hooks/useCachedQuery';
 import { Input } from './Field';
+import { VisitPriorityBadge, PriceTierBadge } from './Badge';
+import { buildPickerSections, filterPickerSections, pickerSelectionFor } from '../lib/researchSummary';
 import { LoadingState } from './States';
 import './ResearchPicker.css';
 
@@ -25,28 +27,15 @@ const REF_SECTIONS = [
   { type: 'transport', label: 'Transport', list: listTransportEntries },
 ];
 
-// Mirrors the exact display-name fallback each section page already
-// uses for its own cards (RestaurantsPage: place?.name || dishName ||
-// 'Restaurant'; TransportPage: from/to labels) — not a new naming
-// convention, just centralized here since the picker needs to render
-// all four section shapes in one flat list.
-function describeResearchItem(type, record) {
-  switch (type) {
-    case 'attractions':
-    case 'accommodations':
-      return record.place?.name || 'Untitled';
-    case 'restaurants':
-      return isPlaceBased(record) ? (record.place?.name || 'Untitled') : (record.dishName || 'Food note');
-    case 'transport': {
-      if (record.travelType === 'local') return `Local transport${record.mode ? ` — ${record.mode}` : ''}`;
-      const from = record.from?.label || '?';
-      const to = record.to?.label || '?';
-      return `${from} → ${to}`;
-    }
-    default:
-      return 'Untitled';
-  }
-}
+// Display names and the per-category compact previews come from
+// lib/researchSummary.js (the name fallbacks are the same ones each
+// section page already uses for its own cards — centralized there
+// because the picker renders all four section shapes in one flat
+// list). Phase 3: each row now also carries a short preview built from
+// fields the record already has (never invented, different per
+// category) so similar entries can be told apart without opening each
+// Research record. Previews are computed once per data load from the
+// records this picker already fetched — no extra reads per row.
 
 export default function ResearchPicker({ destinationId, onSelect }) {
   const [query, setQuery] = useState('');
@@ -57,18 +46,11 @@ export default function ResearchPicker({ destinationId, onSelect }) {
   }, [destinationId]);
   const { data, loading } = useCachedQuery(`research-picker:${destinationId}`, fetcher);
 
-  const filtered = useMemo(() => {
-    if (!data) return [];
-    const q = query.trim().toLowerCase();
-    return data
-      .map(section => ({
-        ...section,
-        items: section.items
-          .map(item => ({ item, label: describeResearchItem(section.type, item) }))
-          .filter(({ label }) => !q || label.toLowerCase().includes(q)),
-      }))
-      .filter(section => section.items.length > 0);
-  }, [data, query]);
+  // Rows (label + preview) are built once per data load; typing in the
+  // search box only re-filters them by name — exactly the previous
+  // search behaviour, without rebuilding previews on every keystroke.
+  const pickerSections = useMemo(() => buildPickerSections(data), [data]);
+  const filtered = useMemo(() => filterPickerSections(pickerSections, query), [pickerSections, query]);
 
   if (loading && !data) return <LoadingState label="Loading Research…" />;
 
@@ -90,14 +72,21 @@ export default function ResearchPicker({ destinationId, onSelect }) {
           {filtered.map(section => (
             <div key={section.type} className="research-picker__section">
               <span className="research-picker__section-label">{section.label}</span>
-              {section.items.map(({ item, label }) => (
+              {section.rows.map(row => (
                 <button
-                  key={item.id}
+                  key={row.item.id}
                   type="button"
                   className="research-picker__result"
-                  onClick={() => onSelect({ researchRefType: section.type, researchRefId: item.id, label })}
+                  onClick={() => onSelect(pickerSelectionFor(section.type, row))}
                 >
-                  {label}
+                  <span className="research-picker__result-head">
+                    <span className="research-picker__result-name">{row.label}</span>
+                    {row.preview.badge?.kind === 'visitPriority' && <VisitPriorityBadge visitPriority={row.preview.badge.value} />}
+                    {row.preview.badge?.kind === 'priceTier' && <PriceTierBadge priceTier={row.preview.badge.value} />}
+                  </span>
+                  {row.preview.parts.length > 0 && (
+                    <span className="research-picker__result-preview">{row.preview.parts.join(' · ')}</span>
+                  )}
                 </button>
               ))}
             </div>

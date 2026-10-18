@@ -10,6 +10,9 @@ import SectionPageLayout from '../../components/SectionPageLayout';
 import Card from '../../components/Card';
 import Button from '../../components/Button';
 import Modal from '../../components/Modal';
+import PlanningUsage from '../../components/PlanningUsage';
+import { ResearchUnavailableNotice } from '../../components/ResearchSummary';
+import { useOpenRecordFromUrl } from '../../hooks/useOpenRecordFromUrl';
 import { Input, TextArea, Select, Checkbox } from '../../components/Field';
 import { PriceTierBadge } from '../../components/Badge';
 import { PlaceField, PlaceSummary } from '../../components/Place';
@@ -49,6 +52,9 @@ export default function RestaurantsPage() {
     return { destination, restaurants, dishes, locations };
   }, [destinationId]);
   const { data, error, loading, refresh } = useCachedQuery(`foodAndRestaurants:${destinationId}`, fetcher);
+  // Phase 3: Planning links here with ?open=<id> to open this exact
+  // record's existing edit modal (see hooks/useOpenRecordFromUrl.js).
+  const { unavailable: openUnavailable, dismissUnavailable } = useOpenRecordFromUrl({ records: data?.restaurants, onOpen: setEditingRestaurant });
 
   function afterMutation() {
     invalidateCachedQuery(`foodAndRestaurants:${destinationId}`);
@@ -95,6 +101,7 @@ export default function RestaurantsPage() {
       locationLabel={contextLocation?.name}
       title="Food & Restaurants"
     >
+      {openUnavailable && <ResearchUnavailableNotice onDismiss={dismissUnavailable} />}
       <div className="food-tabs">
         <button type="button" className={`food-tabs__tab ${activeTab === 'restaurants' ? 'food-tabs__tab--active' : ''}`} onClick={() => setTab('restaurants')}>Restaurants</button>
         <button type="button" className={`food-tabs__tab ${activeTab === 'dishes' ? 'food-tabs__tab--active' : ''}`} onClick={() => setTab('dishes')}>Dishes</button>
@@ -269,6 +276,7 @@ function RestaurantForm({ destinationId, destinationName, record, currencies, de
   return (
     <Modal open onClose={onClose} title={record ? 'Edit Entry' : 'New Restaurant / Food Note'}>
       <form onSubmit={handleSubmit}>
+        {record && <PlanningUsage destinationId={destinationId} researchRefType="restaurants" researchRefId={record.id} />}
         <Checkbox label="This is a specific restaurant (has a place)" checked={hasPlace} onChange={e => setHasPlace(e.target.checked)} />
         {hasPlace ? (
           <PlaceField value={place} onChange={setPlace} destinationName={destinationName} expectedCategory={CATEGORY_HINTS.restaurant} />
