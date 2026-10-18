@@ -5,6 +5,7 @@ import { listDestinations, getDestination } from '../db/stores/destinations';
 import { listPeople } from '../db/stores/people';
 import { listTimelineItems, createTimelineItem, updateTimelineItem, deleteTimelineItem, TIMELINE_ITEM_TYPES } from '../db/stores/timelineItems';
 import { listOptionGroupsForPlanning, createOptionGroup, selectOption, deleteOptionGroup } from '../db/stores/planningOptionGroups';
+import { detachOrphanedGroupItems, describeOptionGroupDeletion } from '../lib/optionGroupIntegrity';
 import { listAlternativesForItem, createItemAlternative, updateItemAlternative, deleteItemAlternative } from '../db/stores/itemAlternatives';
 import { listReviewFlagsForPlanning, markReviewed, clearReviewFlag } from '../db/stores/planningReviewFlags';
 import { listAttractions } from '../db/stores/attractions';
@@ -128,12 +129,18 @@ export default function PlanningDetailPage() {
       isNew ? Promise.resolve(null) : getPlanning(planningId),
     ]);
     if (!isNew && !planning) throw new Error('Planning not found.');
-    const [destination, timelineItems, optionGroups, reviewFlags] = await Promise.all([
+    const [destination, loadedItems, optionGroups, reviewFlags] = await Promise.all([
       planning ? getDestination(planning.destinationId) : Promise.resolve(null),
       planning ? listTimelineItems(planning.id) : Promise.resolve([]),
       planning ? listOptionGroupsForPlanning(planning.id) : Promise.resolve([]),
       planning ? listReviewFlagsForPlanning(planning.id) : Promise.resolve([]),
     ]);
+    // An item still pointing at an Option group that no longer exists
+    // (left behind by the old group deletion) reads as the ordinary
+    // item it reverts to — so it is visible, movable and counted
+    // consistently everywhere below. Read-time only; nothing stored is
+    // rewritten. See lib/optionGroupIntegrity.js.
+    const timelineItems = detachOrphanedGroupItems(loadedItems, optionGroups);
     // Research records referenced by timeline items/alternatives are
     // resolved here, once, for the whole page — never duplicated onto
     // the timeline item itself. All four itinerary-relevant Research
@@ -770,19 +777,21 @@ function DaysTimeline({ planning, destinationId, timelineItems, optionGroups, re
   }
 
   async function handleDeleteGroup(group) {
-    const itemCount = (groupedItemsByGroupId[group.id] || []).length;
-    const message = itemCount > 0
-      ? `Delete this Option group? Its ${itemCount} item(s) will remain but will no longer belong to any Option.`
-      : 'Delete this Option group?';
+    const { message } = describeOptionGroupDeletion(group, groupedItemsByGroupId[group.id] || []);
     if (!window.confirm(message)) return;
-    // Deleting the group is intentionally non-destructive to its items
-    // — they simply revert to plain, ungrouped timeline items (their
-    // optionGroupId/optionLabel just become stale references pointing
-    // at a soft-deleted group, treated the same as "no group" by the
-    // rendering logic above, which only looks items up BY a group's
-    // own id from the currently-active groups list).
-    await deleteOptionGroup(group.id);
-    onChange();
+    // Deleting the group is non-destructive to its items — they revert
+    // to ordinary, ungrouped timeline items, atomically with the
+    // group's own deletion (see deleteOptionGroup in
+    // db/stores/planningOptionGroups.js). The refresh runs either way
+    // so that, if the group was already gone (e.g. a second tap, or
+    // another tab removed it), the screen simply catches up.
+    try {
+      await deleteOptionGroup(group.id);
+    } catch (err) {
+      if (err?.message !== 'Record not found.') throw err;
+    } finally {
+      onChange();
+    }
   }
 
   return (

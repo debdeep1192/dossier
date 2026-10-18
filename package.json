@@ -13,7 +13,8 @@
     "test:place-lookup": "node src/db/__tests__/placeLookup.test.js",
     "test:add-entry": "node src/db/__tests__/addEntry.test.js",
     "test:research-planning": "node src/db/__tests__/researchPlanning.test.js",
-    "test:all": "npm test && npm run test:pdf && npm run test:place-lookup && npm run test:add-entry && npm run test:research-planning"
+    "test:itinerary-integrity": "node src/db/__tests__/itineraryIntegrity.test.js",
+    "test:all": "npm test && npm run test:pdf && npm run test:place-lookup && npm run test:add-entry && npm run test:research-planning && npm run test:itinerary-integrity"
   },
   "dependencies": {
     "pdfjs-dist": "^6.2.108",

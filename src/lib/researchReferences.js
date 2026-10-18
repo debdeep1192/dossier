@@ -24,10 +24,13 @@
 //     listTimelineItems / checked here)
 //   - the alternative is active and its parent item is active
 //     (alternatives are only collected for active items)
-//   - a grouped item whose Option group no longer exists (deleted) is
-//     NOT counted: Planning's day view never renders such an item (it
-//     is only rendered through an active group), so it is not a
-//     reference the person can see or act on from the Planning.
+//   - an item left pointing at an Option group that no longer exists
+//     (an orphan from before deleting a group started reverting its
+//     items) is read as the ordinary item it reverts to — exactly how
+//     the Planning page itself now presents it (see
+//     lib/optionGroupIntegrity.js) — so a Research reference is never
+//     counted for an item the person cannot see, nor missed for one
+//     they can.
 // One Planning appears once per Research entry, however many of its
 // items/alternatives point at the same record.
 
@@ -36,6 +39,7 @@ import { listTimelineItems } from '../db/stores/timelineItems.js';
 import { listOptionGroupsForPlanning } from '../db/stores/planningOptionGroups.js';
 import { listAlternativesForItem } from '../db/stores/itemAlternatives.js';
 import { isTimelineItemCurrentlyIncluded, isAlternativeCurrentlyIncluded } from './planningCosts.js';
+import { detachOrphanedGroupItems } from './optionGroupIntegrity.js';
 
 // Loads, once for a whole destination, everything needed to answer
 // reverse-reference questions for ANY Research entry in it. A Research
@@ -74,7 +78,7 @@ export function deriveResearchReferences({ researchRefType, researchRefId, plann
   for (const { planning, timelineItems, optionGroups, alternativesByItemId } of planningData || []) {
     if (!planning || planning.deletedAt) continue;
     const groupsById = Object.fromEntries((optionGroups || []).filter(g => !g.deletedAt).map(g => [g.id, g]));
-    const visibleItems = (timelineItems || []).filter(item => !item.deletedAt && (!item.optionGroupId || groupsById[item.optionGroupId]));
+    const visibleItems = detachOrphanedGroupItems((timelineItems || []).filter(item => !item.deletedAt), Object.values(groupsById));
 
     let referenceCount = 0;
     let included = false;

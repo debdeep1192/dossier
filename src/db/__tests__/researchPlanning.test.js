@@ -14,7 +14,7 @@
 
 import 'fake-indexeddb/auto';
 import assert from 'node:assert/strict';
-import { __resetDbForTest, getDb } from '../connection.js';
+import { __resetDbForTest, getDb, getOne, put } from '../connection.js';
 import { createDestination } from '../stores/destinations.js';
 import { createAttraction, listAttractions, deleteAttraction } from '../stores/attractions.js';
 import { createRestaurantEntry, listRestaurantEntries } from '../stores/restaurants.js';
@@ -540,15 +540,29 @@ await test('C8. soft-deleted Plannings never appear', async () => {
   assert.deepEqual(refs.map(r => r.planning.name), ['Keep']);
 });
 
-await test('C9. items orphaned by a deleted Option group (never shown in the Planning) are not counted as references', async () => {
+await test('C9. deleting an Option group keeps its items as ordinary items, so their Research references stay (now as current-itinerary inclusion); legacy orphans read the same way', async () => {
+  // Phase 4 changed this on purpose. Phase 3 skipped items orphaned by a
+  // deleted group because the Planning page could not show them; the page now
+  // shows them as the ordinary items they revert to, so they ARE references.
   const dest = await createDestination({ name: 'Darjeeling' });
   const attraction = await createAttraction(dest.id, { place: { name: 'Tiger Hill' } });
   const planning = await createPlanning(dest.id, { name: 'Trip', ...TRIP });
   const group = await createOptionGroup(planning.id, { dayNumber: 1, partLabel: 'Morning' });
   await createTimelineItem(planning.id, 1, { itemType: 'attraction', researchRefType: 'attractions', researchRefId: attraction.id, optionGroupId: group.id, optionLabel: 'A', partLabel: 'Morning' });
-  assert.equal((await refsFor(dest.id, 'attractions', attraction.id)).length, 1);
+  assert.equal((await refsFor(dest.id, 'attractions', attraction.id))[0].status, 'referenced', 'pending group: not in the current itinerary yet');
   await deleteOptionGroup(group.id);
-  assert.deepEqual(await refsFor(dest.id, 'attractions', attraction.id), []);
+  const after = await refsFor(dest.id, 'attractions', attraction.id);
+  assert.equal(after.length, 1);
+  assert.equal(after[0].status, 'included');
+
+  // A record orphaned by the OLD deletion (group row deleted, item still pointing at it).
+  const legacyGroup = await createOptionGroup(planning.id, { dayNumber: 2, partLabel: 'Evening' });
+  const legacyItem = await createTimelineItem(planning.id, 2, { itemType: 'attraction', researchRefType: 'attractions', researchRefId: attraction.id, optionGroupId: legacyGroup.id, optionLabel: 'A', partLabel: 'Evening' });
+  await put('planningOptionGroups', { ...(await getOne('planningOptionGroups', legacyGroup.id)), deletedAt: new Date().toISOString() });
+  const legacy = await refsFor(dest.id, 'attractions', attraction.id);
+  assert.equal(legacy.length, 1, 'still one row for the Planning');
+  assert.equal(legacy[0].referenceCount, 2, 'the orphan now counts as a visible reference');
+  assert.equal((await getOne('timelineItems', legacyItem.id)).optionGroupId, legacyGroup.id, 'read-only: the stored orphan is not rewritten');
 });
 
 await test('C10. an entry with no references (and an entry nobody used) gives a clean empty result', async () => {

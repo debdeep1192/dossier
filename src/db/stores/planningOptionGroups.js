@@ -1,5 +1,4 @@
-import { getAll, getOne, newId, put } from '../connection.js';
-import { softDelete } from './crud.js';
+import { getAll, getOne, newId, put, tx } from '../connection.js';
 
 const STORE = 'planningOptionGroups';
 
@@ -80,6 +79,57 @@ export async function selectOption(groupId, optionLabel) {
   return next;
 }
 
+// Deletes an Option group WITHOUT deleting or hiding any of its items.
+//
+// Intended behaviour (it is what the confirmation dialog promises —
+// "its item(s) will remain but will no longer belong to any Option" —
+// and what the page always documented): every item that belonged to
+// the group reverts to an ordinary, ungrouped timeline item, keeping
+// its day, time, duration, buffer, notes, status, costs, Research
+// reference and its item Alternatives (which hang off the item, not
+// the group, so they stay valid). Only the two fields that tie an item
+// to the now-deleted group — optionGroupId and optionLabel — are
+// cleared, because that relationship is the one thing that genuinely
+// becomes invalid.
+//
+// Previously this only soft-deleted the group row, leaving its items
+// active but pointing at a group that no longer exists: the Planning
+// page then never rendered them (grouped items are only reached
+// through an active group), and the cost/audit/conflict inclusion
+// rules dropped them too. See lib/optionGroupIntegrity.js.
+//
+// Atomic: the group's soft-delete and every item's detachment happen
+// in ONE readwrite transaction over both stores, so there is no
+// moment where the group is gone but its items are still pointing at
+// it (or vice versa), and any failure rolls the whole thing back. An
+// empty group, or a group whose items were all already deleted, simply
+// has nothing to detach. Deleting an already-deleted/unknown group
+// still throws the same 'Record not found.' as every other delete and
+// changes nothing.
 export function deleteOptionGroup(id) {
-  return softDelete(STORE, id);
+  return tx([STORE, 'timelineItems'], 'readwrite', (stores) => new Promise((resolve, reject) => {
+    const fail = (error) => {
+      // Roll back anything already queued in this transaction.
+      try { stores[STORE].transaction.abort(); } catch { /* transaction already finished */ }
+      reject(error);
+    };
+    const groupRequest = stores[STORE].get(id);
+    groupRequest.onerror = () => fail(groupRequest.error);
+    groupRequest.onsuccess = () => {
+      const group = groupRequest.result;
+      if (!group || group.deletedAt) { fail(new Error('Record not found.')); return; }
+      const itemsRequest = stores.timelineItems.index('planningId').getAll(group.planningId);
+      itemsRequest.onerror = () => fail(itemsRequest.error);
+      itemsRequest.onsuccess = () => {
+        const now = new Date().toISOString();
+        for (const item of itemsRequest.result) {
+          if (item.deletedAt || item.optionGroupId !== id) continue;
+          stores.timelineItems.put({ ...item, optionGroupId: null, optionLabel: null, updatedAt: now });
+        }
+        const deleted = { ...group, deletedAt: now };
+        stores[STORE].put(deleted);
+        resolve(deleted);
+      };
+    };
+  }));
 }

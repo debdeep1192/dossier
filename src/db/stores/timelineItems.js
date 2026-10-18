@@ -1,5 +1,6 @@
 import { getAll, newId } from '../connection.js';
 import { getActive, save, patch, softDelete } from './crud.js';
+import { getOptionGroup } from './planningOptionGroups.js';
 
 const STORE = 'timelineItems';
 
@@ -150,9 +151,25 @@ function assertValid(fields) {
   }
 }
 
+// An item may only be attached to an Option group that is still active,
+// belongs to the SAME Planning, and is for the same day — otherwise it
+// would be created already orphaned (pointing at a group the Planning
+// page can never render), which is exactly the invisible-item state
+// deleting a group used to leave behind. Checked only when an item is
+// being attached to a group (on create, or when update changes its
+// group), so editing an item that is ALREADY orphaned from an old
+// deletion (notes, time, ...) is never blocked by this.
+async function assertOptionGroupAttachable(planningId, dayNumber, optionGroupId) {
+  const group = await getOptionGroup(optionGroupId);
+  if (!group) throw new Error('That Option group no longer exists.');
+  if (group.planningId !== planningId) throw new Error('That Option group belongs to a different Planning.');
+  if (group.dayNumber !== dayNumber) throw new Error("An item in an Option group has to be on the group's day.");
+}
+
 export async function createTimelineItem(planningId, dayNumber, fields) {
   const merged = { ...emptyTimelineItem(), ...fields, planningId, dayNumber };
   assertValid(merged);
+  if (merged.optionGroupId) await assertOptionGroupAttachable(planningId, dayNumber, merged.optionGroupId);
   const now = new Date().toISOString();
   const record = {
     id: newId(),
@@ -186,6 +203,9 @@ export async function updateTimelineItem(id, fields) {
   if (!existing) throw new Error('Timeline item not found.');
   const merged = { ...existing, ...fields };
   assertValid(merged);
+  if (fields.optionGroupId && fields.optionGroupId !== existing.optionGroupId) {
+    await assertOptionGroupAttachable(existing.planningId, merged.dayNumber, fields.optionGroupId);
+  }
   const updates = { ...fields };
   if (fields.title !== undefined) updates.title = fields.title.trim();
   return patch(STORE, id, updates);

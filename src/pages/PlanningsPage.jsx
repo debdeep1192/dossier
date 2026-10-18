@@ -5,6 +5,7 @@ import { listDestinations } from '../db/stores/destinations';
 import { listPeople } from '../db/stores/people';
 import { listTimelineItems } from '../db/stores/timelineItems';
 import { listOptionGroupsForPlanning } from '../db/stores/planningOptionGroups';
+import { detachOrphanedGroupItems } from '../lib/optionGroupIntegrity';
 import { listAlternativesForItem } from '../db/stores/itemAlternatives';
 import { listReviewFlagsForPlanning } from '../db/stores/planningReviewFlags';
 import { listAttractions } from '../db/stores/attractions';
@@ -73,11 +74,15 @@ export default function PlanningsPage() {
     // every Planning in the list.
     const summaryByPlanningId = {};
     await Promise.all(plannings.map(async (planning) => {
-      const [timelineItems, optionGroups, reviewFlags] = await Promise.all([
+      const [loadedItems, optionGroups, reviewFlags] = await Promise.all([
         listTimelineItems(planning.id),
         listOptionGroupsForPlanning(planning.id),
         listReviewFlagsForPlanning(planning.id),
       ]);
+      // Same read-time tolerance as the Planning page: an item left
+      // pointing at a deleted Option group counts as the ordinary item
+      // it reverts to, so this summary agrees with the Planning screen.
+      const timelineItems = detachOrphanedGroupItems(loadedItems, optionGroups);
       const alternativesByItemId = {};
       await Promise.all(timelineItems.map(async (item) => {
         alternativesByItemId[item.id] = await listAlternativesForItem(item.id);
