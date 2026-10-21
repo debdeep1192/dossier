@@ -1,7 +1,7 @@
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(38, 50, 56, 0.45);
+  background: rgba(20, 39, 46, 0.58);
   display: flex;
   align-items: flex-end;
   justify-content: center;
@@ -16,7 +16,9 @@
   overflow-y: auto;
   background: var(--color-surface);
   border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  border-top: 3px solid var(--petrol);
   padding: var(--space-6);
+  box-shadow: var(--shadow-lg);
   animation: slide-up 0.2s ease;
 }
 
@@ -34,7 +36,10 @@
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
+  gap: var(--space-3);
   margin-bottom: var(--space-5);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--color-border);
 }
 
 .modal__title { margin: 0; }
@@ -44,8 +49,12 @@
   border: none;
   font-size: 1.5rem;
   line-height: 1;
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   cursor: pointer;
-  padding: 0 var(--space-1);
+  /* 40px square touch target around a small glyph */
+  min-width: 40px;
+  min-height: 40px;
+  margin: calc(var(--space-2) * -1) calc(var(--space-2) * -1) 0 0;
+  border-radius: var(--radius-md);
 }
-.modal__close:hover { color: var(--color-text-primary); }
+.modal__close:hover { color: var(--color-text-strong); background: var(--tint-neutral); }

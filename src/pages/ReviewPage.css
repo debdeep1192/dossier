@@ -35,6 +35,6 @@
 .review-page__decided-row { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-2); }
 .review-page__status { font-size: var(--text-xs); font-weight: 700; text-transform: uppercase; padding: 2px var(--space-2); border-radius: var(--radius-sm); }
 .review-page__status--accepted { background: var(--color-surface-sage); color: var(--color-teal-dark); }
-.review-page__status--rejected { background: #FBEEE9; color: var(--color-danger); }
+.review-page__status--rejected { background: var(--tint-orange); color: var(--color-danger); }
 .review-page__decided-excerpt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text-secondary); font-size: var(--text-sm); }
 .review-page__decided-link { font-size: var(--text-sm); flex-shrink: 0; }

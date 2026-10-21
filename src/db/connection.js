@@ -161,7 +161,7 @@ function openDatabase() {
 
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
-    request.onblocked = () => reject(new Error('Database upgrade blocked by another open tab. Close other Dossier tabs and reload.'));
+    request.onblocked = () => reject(new Error('Database upgrade blocked by another open tab. Close other Debdeep Travels tabs and reload.'));
   });
 }
 

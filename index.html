@@ -4,10 +4,17 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="theme-color" content="#2A9D8F" />
-    <!-- Deliberately no external font <link> — system fonts only, so
-         first paint has zero network dependency (local-first goal). -->
-    <title>Dossier — Travel Research</title>
+    <!-- Abyss: matches the mobile masthead so the browser chrome and the
+         app header read as one surface. -->
+    <meta name="theme-color" content="#14272E" />
+    <meta name="application-name" content="Debdeep Travels" />
+    <meta name="apple-mobile-web-app-title" content="Debdeep Travels" />
+    <meta name="description" content="Debdeep Travels — a personal travel research, planning and archive application." />
+    <!-- Deliberately no external font <link> or @import — the typefaces
+         (Newsreader, IBM Plex Sans, IBM Plex Mono) are self-hosted and
+         bundled from src/assets/fonts, so first paint has zero network
+         dependency (local-first goal). See src/styles/fonts.css. -->
+    <title>Debdeep Travels — Research, Plan, Go</title>
   </head>
   <body>
     <div id="root"></div>

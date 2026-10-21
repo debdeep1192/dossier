@@ -1,18 +1,24 @@
 import { useState } from 'react';
 import { Link, NavLink, Outlet, useMatch, useLocation, useSearchParams, useNavigate } from 'react-router-dom';
 import AddEntry from './AddEntry';
+import BrandMark from './BrandMark';
+import { HomeIcon, PlanningIcon, TravellersIcon, PlusIcon } from './NavIcons';
 import { SECTIONS } from '../sectionRegistry.js';
 import { matchCurrentSection, buildAddDestinationPath, isPlanningPath } from '../lib/addEntryRouting.js';
 import { AddEntryProvider } from '../lib/addEntryContext.js';
+import { PRODUCT_NAME } from '../lib/brand.js';
 import './AppShell.css';
 
+// Same three destinations, same order, same routes as before — only the
+// icons changed (emoji -> a consistent inline SVG set, see NavIcons.jsx).
 const NAV_ITEMS = [
-  { to: '/', label: 'Home', icon: '🏠' },
+  { to: '/', label: 'Home', icon: <HomeIcon /> },
   // Tour Planning, Chunk 1 — top-level nav entries alongside Home,
   // since People and Plannings aren't scoped to a single destination.
-  { to: '/plannings', label: 'Plannings', icon: '🗺️' },
-  { to: '/people', label: 'Travellers', icon: '🧑' },
+  { to: '/plannings', label: 'Plannings', icon: <PlanningIcon /> },
+  { to: '/people', label: 'Travellers', icon: <TravellersIcon /> },
 ];
+
 
 // `children`, when provided, replaces the routed <Outlet /> content —
 // used for progressive rendering (showing the real nav chrome
@@ -82,13 +88,16 @@ export default function AppShell({ children }) {
       <div className="app-shell">
         <aside className="app-shell__sidebar">
           <Link to="/" className="app-shell__brand">
-            <span className="app-shell__brand-mark">D</span>
-            <span className="app-shell__brand-name">Dossier</span>
+            <BrandMark className="app-shell__brand-mark" size={38} />
+            <span className="app-shell__brand-text">
+              <span className="app-shell__brand-name">{PRODUCT_NAME}</span>
+              <span className="app-shell__brand-tagline">Research · Plan · Go</span>
+            </span>
           </Link>
           <nav className="app-shell__sidebar-nav">
             {NAV_ITEMS.map(item => (
               <NavLink key={item.to} to={item.to} end className={({ isActive }) => `app-shell__sidebar-link ${isActive ? 'app-shell__sidebar-link--active' : ''}`}>
-                <span aria-hidden="true">{item.icon}</span>
+                <span className="app-shell__sidebar-icon" aria-hidden="true">{item.icon}</span>
                 <span>{item.label}</span>
               </NavLink>
             ))}
@@ -96,6 +105,14 @@ export default function AppShell({ children }) {
         </aside>
 
         <div className="app-shell__main">
+          {/* Mobile masthead — the sidebar (and so the brand) is hidden
+              below 900px; this keeps the product identity on screen. */}
+          <header className="app-shell__masthead">
+            <Link to="/" className="app-shell__masthead-brand">
+              <BrandMark size={28} />
+              <span className="app-shell__masthead-name">{PRODUCT_NAME}</span>
+            </Link>
+          </header>
           <main className="app-shell__content">
             {children ?? <Outlet />}
           </main>
@@ -108,8 +125,8 @@ export default function AppShell({ children }) {
             SectionPageLayout.jsx and each section page) so this is
             never one of two competing buttons on the same screen. */}
         {!onPlanningPath && (
-          <button type="button" className="app-shell__fab" onClick={openAdd} aria-label="Add to Dossier">
-            +
+          <button type="button" className="app-shell__fab" onClick={openAdd} aria-label={`Add to ${PRODUCT_NAME}`}>
+            <PlusIcon />
           </button>
         )}
 

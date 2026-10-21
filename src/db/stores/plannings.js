@@ -93,7 +93,19 @@ export function planningDayDate(planning, dayNumber) {
   if (!planning?.startDate) return null;
   const start = new Date(`${planning.startDate}T00:00:00`);
   start.setDate(start.getDate() + (dayNumber - 1));
-  return start.toISOString().slice(0, 10); // YYYY-MM-DD, matching the existing date convention
+  // Build YYYY-MM-DD from LOCAL calendar components, not
+  // toISOString() — toISOString() converts to UTC first, which shifts
+  // the calendar date backward (or forward) in any timezone with a
+  // non-zero offset from UTC (e.g. IST: a local midnight becomes the
+  // previous day's evening in UTC). This is a date-ONLY value (matches
+  // the existing YYYY-MM-DD convention throughout Dossier), so it must
+  // be read back out using the same local getters the Date was
+  // constructed and advanced with (getFullYear/getMonth/getDate),
+  // never a UTC-based formatter.
+  const year = start.getFullYear();
+  const month = String(start.getMonth() + 1).padStart(2, '0');
+  const day = String(start.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 export function listPlanningDays(planning) {

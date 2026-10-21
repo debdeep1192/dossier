@@ -1,32 +1,40 @@
+/* Empty states read as an empty archive drawer: a dashed outline, a
+   quiet icon tile, an editorial title. */
 .empty-state {
   display: flex;
   flex-direction: column;
   align-items: center;
   text-align: center;
-  padding: var(--space-12) var(--space-6);
+  padding: var(--space-10) var(--space-6);
   gap: var(--space-3);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--paper-sunken) 45%, transparent);
 }
 
 .empty-state__icon {
-  width: 48px;
-  height: 48px;
+  width: 52px;
+  height: 52px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: var(--radius-full);
-  background: var(--color-sage);
-  color: var(--color-teal-dark);
+  border-radius: var(--radius-lg);
+  background: var(--glacial-soft);
+  color: var(--petrol);
   font-size: var(--text-lg);
   margin-bottom: var(--space-2);
+  /* emoji icons are supplied by callers; render as a quiet mark */
+  filter: grayscale(1) opacity(0.8);
 }
 
-.empty-state--error .empty-state__icon { background: #FBEBE6; color: var(--color-coral-dark); }
+.empty-state--error { border-color: var(--orange); }
+.empty-state--error .empty-state__icon { background: var(--tint-orange); color: var(--orange-ink); }
 
-.empty-state__title { margin: 0; }
+.empty-state__title { margin: 0; font-family: var(--font-display); font-weight: 500; font-size: var(--text-xl); }
 
 .empty-state__description {
   color: var(--color-text-secondary);
-  max-width: 360px;
+  max-width: 380px;
   margin: 0 0 var(--space-2) 0;
 }
 
@@ -37,6 +45,7 @@
   gap: var(--space-3);
   padding: var(--space-10);
   color: var(--color-text-secondary);
+  font-family: var(--font-mono);
   font-size: var(--text-sm);
 }
 
@@ -44,7 +53,7 @@
   width: 18px;
   height: 18px;
   border: 2px solid var(--color-border);
-  border-top-color: var(--color-teal);
+  border-top-color: var(--petrol);
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
 }

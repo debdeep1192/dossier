@@ -7,6 +7,7 @@ import Button from '../components/Button';
 import Modal from '../components/Modal';
 import { Input, TextArea, Select } from '../components/Field';
 import { EmptyState, LoadingState, ErrorState } from '../components/States';
+import ExpeditionDesk from '../components/ExpeditionDesk';
 import './ResearchHome.css';
 
 export default function ResearchHome() {
@@ -30,6 +31,7 @@ export default function ResearchHome() {
   if (loading && !destinations) {
     return (
       <div className="research-home">
+        <ExpeditionDesk />
         <Header onNew={() => setShowCreateModal(true)} />
         <LoadingState label="Loading your destinations…" />
       </div>
@@ -38,6 +40,7 @@ export default function ResearchHome() {
 
   return (
     <div className="research-home">
+      <ExpeditionDesk />
       <Header onNew={() => setShowCreateModal(true)} />
 
       {destinations.length === 0 ? (
@@ -80,7 +83,8 @@ function Header({ onNew }) {
   return (
     <header className="research-home__header">
       <div>
-        <h1>Research</h1>
+        <p className="eyebrow">Field archive</p>
+        <h2>Research</h2>
         <p className="research-home__subtitle">Your personal travel knowledge library.</p>
       </div>
       <Button onClick={onNew}>+ New Destination</Button>

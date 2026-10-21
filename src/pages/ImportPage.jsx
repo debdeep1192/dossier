@@ -9,6 +9,7 @@ import { Input, TextArea } from '../components/Field';
 import { LoadingState, ErrorState } from '../components/States';
 import '../components/SectionPageLayout.css';
 import './ImportPage.css';
+import { PRODUCT_NAME } from '../lib/brand.js';
 
 export default function ImportPage() {
   const { destinationId } = useParams();
@@ -71,8 +72,8 @@ export default function ImportPage() {
       </div>
       <h1>Import from text</h1>
       <p className="import-page__hint">
-        Paste travel notes, an article, or a guide — or upload a text-based PDF below to pull its text in automatically.
-        Dossier will split it into candidates for you to review, edit, and classify — nothing is added to your research automatically.
+        Paste travel notes, an article, or a guide — or upload a text-based PDF below to pull its text in automatically.{' '}
+        {PRODUCT_NAME} will split it into candidates for you to review, edit, and classify — nothing is added to your research automatically.
       </p>
 
       <div className="import-page__pdf-upload">
@@ -91,7 +92,7 @@ export default function ImportPage() {
           rows={14}
           value={rawText}
           onChange={e => setRawText(e.target.value)}
-          placeholder={'Tip: headings (e.g. "Attractions", "Where to Stay") and bullet lists help Dossier propose the right section for each item.'}
+          placeholder={'Tip: headings (e.g. "Attractions", "Where to Stay") and bullet lists help ' + PRODUCT_NAME + ' propose the right section for each item.'}
         />
         {error && <p className="form-error" role="alert">{error}</p>}
         <Button type="submit" fullWidth disabled={submitting || extractingPdf}>{submitting ? 'Processing…' : 'Split into candidates'}</Button>

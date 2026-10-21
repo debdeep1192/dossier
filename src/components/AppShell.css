@@ -18,10 +18,44 @@
 
 .app-shell__content {
   flex: 1;
-  padding: var(--space-4) var(--space-4) calc(var(--nav-height-mobile) + var(--space-6));
+  padding: var(--space-5) var(--space-4) calc(var(--nav-height-mobile) + var(--space-8));
   max-width: var(--max-content-width);
   width: 100%;
   margin: 0 auto;
+}
+
+/* ---- Mobile masthead: carries the brand where the sidebar is hidden ---- */
+.app-shell__masthead {
+  position: sticky;
+  top: 0;
+  z-index: 39;
+  display: flex;
+  align-items: center;
+  min-height: var(--header-height-mobile);
+  padding: env(safe-area-inset-top) var(--space-4) 0;
+  background: var(--abyss);
+  border-bottom: 1px solid rgba(183, 216, 210, 0.18);
+}
+
+.app-shell__masthead-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--paper);
+  text-decoration: none;
+}
+.app-shell__masthead-brand:hover { text-decoration: none; }
+
+.app-shell__masthead-name {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: var(--text-lg);
+  letter-spacing: var(--tracking-display);
+}
+
+.app-shell__masthead :focus-visible,
+.app-shell__sidebar :focus-visible {
+  outline-color: var(--glacial);
 }
 
 /* ---- Bottom nav: mobile primary navigation ---- */
@@ -30,76 +64,90 @@
   bottom: 0;
   left: 0;
   right: 0;
-  height: var(--nav-height-mobile);
+  height: calc(var(--nav-height-mobile) + env(safe-area-inset-bottom));
   padding-bottom: env(safe-area-inset-bottom);
   display: flex;
   background: var(--color-surface);
   border-top: 1px solid var(--color-border);
-  box-shadow: 0 -2px 12px rgba(38, 50, 56, 0.06);
   z-index: 40;
 }
 
 .app-shell__bottom-link {
+  position: relative;
   flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 2px;
-  color: var(--color-text-muted);
+  gap: 3px;
+  color: var(--color-text-secondary);
   text-decoration: none;
-  transition: color var(--transition-fast);
+  transition: color var(--transition-fast), background-color var(--transition-fast);
 }
 
 .app-shell__bottom-link:hover {
   text-decoration: none;
+  color: var(--color-text-strong);
 }
 
+/* Selected: petrol text + a short orange bearing line on the top edge. */
 .app-shell__bottom-link--active {
-  color: var(--color-teal-dark);
+  color: var(--petrol);
+  background: var(--glacial-soft);
+}
+.app-shell__bottom-link--active::before {
+  content: '';
+  position: absolute;
+  top: -1px;
+  left: 28%;
+  right: 28%;
+  height: 3px;
+  background: var(--orange);
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
 }
 
 .app-shell__bottom-icon {
-  font-size: 20px;
+  display: flex;
   line-height: 1;
 }
 
 .app-shell__bottom-label {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
+  letter-spacing: 0.02em;
 }
 
-/* ---- Global "+ Add to Dossier" entry point ---- */
-/* Floating action button: mobile/default, sits above the bottom nav. */
+/* ---- Global "+ Add" entry point ---- */
+/* The ONE loud control in the product: expedition orange, dark glyph
+   (abyss on orange is 4.9:1). Sits above the bottom nav on mobile. */
 .app-shell__fab {
   position: fixed;
   right: var(--space-4);
-  bottom: calc(var(--nav-height-mobile) + var(--space-4));
+  bottom: calc(var(--nav-height-mobile) + env(safe-area-inset-bottom) + var(--space-4));
   width: 56px;
   height: 56px;
   border-radius: 50%;
-  background: var(--color-teal);
-  color: white;
+  background: var(--color-important);
+  color: var(--color-important-text);
   border: none;
-  font-size: 28px;
-  line-height: 1;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-lg);
   cursor: pointer;
   z-index: 41;
   transition: transform var(--transition-fast), background-color var(--transition-fast);
 }
 .app-shell__fab:hover {
-  background: var(--color-teal-dark);
-  transform: scale(1.04);
+  background: var(--color-important-hover);
+  transform: scale(1.05);
 }
-
-/* Sidebar quick-add button removed: the single bottom-right floating
-   "+ Add" (see .app-shell__fab) is now the ONE Add affordance in every
-   context, so a second sidebar trigger would be exactly the kind of
-   competing control the single-Add-button requirement rules out. */
+.app-shell__fab:active { transform: scale(0.97); }
+.app-shell__fab:focus-visible {
+  outline: 3px solid var(--petrol);
+  outline-offset: 3px;
+  border-radius: 50%;
+}
 
 /* ---- Desktop layout ---- */
 @media (min-width: 900px) {
@@ -107,13 +155,15 @@
     display: flex;
   }
 
+  .app-shell__masthead { display: none; }
+
   .app-shell__sidebar {
     display: flex;
     flex-direction: column;
     width: var(--sidebar-width);
     flex-shrink: 0;
-    background: var(--color-surface);
-    border-right: 1px solid var(--color-border);
+    background: var(--abyss);
+    color: var(--paper);
     padding: var(--space-6) var(--space-4);
     position: sticky;
     top: 0;
@@ -124,28 +174,40 @@
     display: flex;
     align-items: center;
     gap: var(--space-3);
-    padding: 0 var(--space-3);
-    margin-bottom: var(--space-8);
+    padding: var(--space-1) var(--space-2) var(--space-5);
+    margin-bottom: var(--space-5);
+    border-bottom: 1px solid rgba(183, 216, 210, 0.2);
+    color: var(--paper);
+    text-decoration: none;
   }
+  .app-shell__brand:hover { text-decoration: none; }
 
-  .app-shell__brand-mark {
-    width: 34px;
-    height: 34px;
-    border-radius: var(--radius-md);
-    background: var(--color-teal);
-    color: white;
+  .app-shell__brand-mark { flex-shrink: 0; }
+
+  .app-shell__brand-text {
     display: flex;
-    align-items: center;
-    justify-content: center;
-    font-family: var(--font-display);
-    font-weight: 700;
-    font-size: var(--text-lg);
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
   }
 
   .app-shell__brand-name {
     font-family: var(--font-display);
-    font-weight: 600;
+    font-weight: 500;
     font-size: var(--text-lg);
+    line-height: 1.1;
+    letter-spacing: var(--tracking-display);
+  }
+
+  /* Marginalia under the wordmark — mono, tracked caps, like a
+     map-sheet title block. */
+  .app-shell__brand-tagline {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--glacial);
+    opacity: 0.8;
   }
 
   .app-shell__sidebar-nav {
@@ -155,27 +217,41 @@
   }
 
   .app-shell__sidebar-link {
+    position: relative;
     display: flex;
     align-items: center;
     gap: var(--space-3);
-    padding: var(--space-3);
+    padding: var(--space-3) var(--space-3);
     border-radius: var(--radius-md);
-    color: var(--color-text-secondary);
+    color: var(--glacial-muted);
     font-weight: 500;
+    text-decoration: none;
     transition: background-color var(--transition-fast), color var(--transition-fast);
   }
 
   .app-shell__sidebar-link:hover {
-    background: var(--color-sage);
+    background: rgba(183, 216, 210, 0.08);
     text-decoration: none;
-    color: var(--color-text-primary);
+    color: var(--paper);
   }
 
   .app-shell__sidebar-link--active {
-    background: var(--color-sage);
-    color: var(--color-teal-dark);
+    background: rgba(183, 216, 210, 0.13);
+    color: var(--paper);
     font-weight: 600;
   }
+  .app-shell__sidebar-link--active::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 22%;
+    bottom: 22%;
+    width: 3px;
+    background: var(--orange);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  }
+
+  .app-shell__sidebar-icon { display: flex; color: var(--glacial); }
 
   .app-shell__main {
     flex: 1;
@@ -183,10 +259,15 @@
   }
 
   .app-shell__content {
-    padding: var(--space-8);
+    padding: var(--space-8) var(--space-10);
   }
 
   .app-shell__bottom-nav {
     display: none;
+  }
+
+  .app-shell__fab {
+    bottom: var(--space-8);
+    right: var(--space-8);
   }
 }

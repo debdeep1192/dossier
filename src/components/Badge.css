@@ -1,43 +1,53 @@
+/* Badges are labels, not pills: small, square-cornered, tracked —
+   like the tags on a specimen drawer. Every pair below clears 4.5:1. */
 .badge {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  padding: 3px var(--space-2);
-  border-radius: var(--radius-full);
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
   font-size: var(--text-xs);
   font-weight: 600;
-  line-height: 1.4;
+  line-height: 1.5;
+  letter-spacing: 0.01em;
   white-space: nowrap;
 }
 
-.badge--priority-must_know { background: #FBEBE6; color: var(--color-coral-dark); }
-.badge--priority-useful { background: #E4F2EF; color: var(--color-teal-dark); }
-.badge--priority-optional { background: #FBF3DE; color: var(--color-saffron-dark); }
-.badge--priority-reference { background: var(--color-neutral-200); color: var(--color-text-secondary); }
+/* must know / must see  — the one warm hue */
+.badge--priority-must_know,
+.badge--visit-priority-must_see { background: var(--tint-orange); color: var(--orange-ink); }
 
-.badge--visit-priority-must_see { background: #FBEBE6; color: var(--color-coral-dark); }
-.badge--visit-priority-maybe { background: #FBF3DE; color: var(--color-saffron-dark); }
-.badge--visit-priority-skippable { background: var(--color-neutral-200); color: var(--color-text-secondary); }
+/* useful / budget — petrol */
+.badge--priority-useful,
+.badge--price-tier-budget { background: var(--tint-petrol); color: var(--petrol); }
 
-.badge--price-tier-budget { background: #E4F2EF; color: var(--color-teal-dark); }
-.badge--price-tier-regular { background: var(--color-neutral-200); color: var(--color-text-secondary); }
-.badge--price-tier-fine_dining { background: #FBF3DE; color: var(--color-saffron-dark); }
+/* optional / maybe / fine dining — cool slate */
+.badge--priority-optional,
+.badge--visit-priority-maybe,
+.badge--price-tier-fine_dining { background: var(--tint-slate); color: var(--slate); }
+
+/* reference / skippable / regular — neutral */
+.badge--priority-reference,
+.badge--visit-priority-skippable,
+.badge--price-tier-regular { background: var(--tint-neutral); color: var(--color-text-secondary); }
 
 .badge--section {
-  background: var(--color-neutral-200);
+  background: var(--tint-neutral);
   color: var(--color-text-secondary);
+  font-family: var(--font-mono);
+  font-weight: 500;
   text-transform: uppercase;
-  letter-spacing: 0.03em;
+  letter-spacing: var(--tracking-label);
   font-size: 10px;
 }
 
 .badge--imported {
-  background: var(--color-sage);
-  color: var(--color-teal-dark);
+  background: var(--glacial-soft);
+  color: var(--petrol);
 }
 
-.weather-recommendation--excellent { background: #E4F2EF; color: var(--color-teal-dark); }
-.weather-recommendation--very_good { background: #E4F2EF; color: var(--color-teal-dark); }
-.weather-recommendation--good { background: var(--color-neutral-200); color: var(--color-text-secondary); }
-.weather-recommendation--bad { background: #FBF3DE; color: var(--color-saffron-dark); }
-.weather-recommendation--must_avoid { background: #FBEBE6; color: var(--color-coral-dark); }
+.weather-recommendation--excellent,
+.weather-recommendation--very_good { background: var(--tint-petrol); color: var(--petrol); }
+.weather-recommendation--good { background: var(--tint-neutral); color: var(--color-text-secondary); }
+.weather-recommendation--bad { background: var(--tint-orange); color: var(--orange-ink); }
+.weather-recommendation--must_avoid { background: var(--orange-ink); color: var(--paper-raised); }

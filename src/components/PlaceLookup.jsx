@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { lookupPlace, getCachedConfirmedResult, setCachedConfirmedResult, buildConfirmedPlace } from '../lib/placeLookup.js';
 import Button from './Button';
 import './PlaceLookup.css';
+import { PRODUCT_NAME } from '../lib/brand.js';
 
 // Explicit "Find Place" action — item 9/6 of the spec. Sits inside
 // PlaceField (see Place.jsx) so every place-based form gets this for
@@ -121,7 +122,7 @@ export default function PlaceLookup({ name, locationName, destinationName, expec
           <p className="place-lookup__hint">
             {candidates[0]?.cached
               ? 'Previously confirmed for this name — reuse it?'
-              : 'Ranked by name, location, and category match — not by Google reviews (Dossier doesn\'t have access to those). Pick the right one, or dismiss and enter manually.'}
+              : 'Ranked by name, location, and category match — not by Google reviews (' + PRODUCT_NAME + ' doesn\'t have access to those). Pick the right one, or dismiss and enter manually.'}
           </p>
           {broaderSearchUsed && (
             <p className={`place-lookup__hint place-lookup__hint--broader${entityTypeDropped ? ' place-lookup__hint--caution' : ''}`}>

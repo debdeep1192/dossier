@@ -152,7 +152,7 @@ export default function PlanningsPage() {
               <div className="entry-card__main">
                 <span className="entry-card__title">{planning.name}</span>
                 <p className="entry-card__meta">
-                  {destinationsById[planning.destinationId]?.name || 'Unknown destination'} · {planning.startDate} – {planning.endDate}
+                  {destinationsById[planning.destinationId]?.name || 'Unknown destination'} · <span className="mono">{planning.startDate} – {planning.endDate}</span>
                 </p>
                 <PlanningCardSummary summary={summaryByPlanningId[planning.id]} />
               </div>

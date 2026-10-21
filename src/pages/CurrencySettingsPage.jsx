@@ -8,6 +8,7 @@ import Button from '../components/Button';
 import { Input, Select } from '../components/Field';
 import { LoadingState, ErrorState } from '../components/States';
 import '../components/SectionPageLayout.css';
+import { PRODUCT_NAME } from '../lib/brand.js';
 
 export default function CurrencySettingsPage() {
   const { destinationId } = useParams();
@@ -96,7 +97,7 @@ export default function CurrencySettingsPage() {
 
       <h2>Exchange rates</h2>
       <p className="entry-card__meta" style={{ marginBottom: 'var(--space-4)' }}>
-        Rates are set against USD — enter how much of each currency equals 1 USD. Dossier works out conversions between any two currencies you've added through USD automatically. Changing a rate only affects future display conversions — it never edits research records you've already saved.
+        Rates are set against USD — enter how much of each currency equals 1 USD. {PRODUCT_NAME} works out conversions between any two currencies you've added through USD automatically. Changing a rate only affects future display conversions — it never edits research records you've already saved.
       </p>
 
       {currencies.filter(c => c !== 'USD').map((code) => {

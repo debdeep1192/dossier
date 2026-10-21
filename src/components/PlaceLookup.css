@@ -8,13 +8,13 @@
   margin: var(--space-2) 0;
 }
 .place-lookup__hint--error {
-  color: var(--color-danger, #b91c1c);
+  color: var(--color-danger);
 }
 .place-lookup__hint--broader {
   color: var(--color-teal-dark, var(--color-teal));
 }
 .place-lookup__hint--caution {
-  color: var(--color-danger, #b91c1c);
+  color: var(--color-danger);
   font-weight: 600;
 }
 
@@ -42,7 +42,7 @@
 }
 .place-lookup__candidate:first-child {
   border-color: var(--color-teal);
-  background: var(--color-teal-subtle, rgba(20, 130, 120, 0.06));
+  background: var(--color-surface-selected);
 }
 
 .place-lookup__candidate-name {

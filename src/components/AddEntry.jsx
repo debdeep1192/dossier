@@ -8,6 +8,7 @@ import Modal from './Modal';
 import Button from './Button';
 import Card from './Card';
 import { Select, Input } from './Field';
+import { PRODUCT_NAME } from '../lib/brand.js';
 import './AddEntry.css';
 
 // The single, coherent "+ Add to Dossier" flow (Phase 3 Chunk 12) —
@@ -69,7 +70,7 @@ export default function AddEntry({ open, onClose, initialDestinationId, initialL
   if (!open) return null;
 
   return (
-    <Modal open={open} onClose={handleClose} title="Add to Dossier">
+    <Modal open={open} onClose={handleClose} title={`Add to ${PRODUCT_NAME}`}>
       {step === 'type' && <TypeStep onSelect={handleSelectSection} />}
       {step === 'context' && selectedSection && (
         <ContextStep

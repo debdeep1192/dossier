@@ -102,6 +102,7 @@ export default function DestinationDetail() {
       </div>
 
       <header className="dest-detail__header">
+        <p className="eyebrow">Destination file</p>
         <h1>{destination.name}</h1>
         {destination.overview && <p className="dest-detail__overview">{destination.overview}</p>}
       </header>

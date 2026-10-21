@@ -2,16 +2,34 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  font-size: var(--text-sm);
-  color: var(--color-text-muted);
-  margin-bottom: var(--space-4);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.02em;
+  color: var(--color-text-secondary);
+  margin-bottom: var(--space-5);
+  flex-wrap: wrap;
 }
 
-.dest-detail__header { margin-bottom: var(--space-4); }
+.dest-detail__header {
+  margin-bottom: var(--space-5);
+  padding-bottom: var(--space-5);
+  border-bottom: 1px solid var(--color-border);
+}
 
+.dest-detail__header h1 {
+  font-size: var(--text-3xl);
+  line-height: 1.05;
+  margin: var(--space-1) 0 0;
+}
+
+/* The overview is a standfirst: the editorial voice, set for reading. */
 .dest-detail__overview {
-  color: var(--color-text-secondary);
-  margin-top: var(--space-2);
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  line-height: 1.5;
+  color: var(--color-text-primary);
+  max-width: 62ch;
+  margin: var(--space-3) 0 0;
 }
 
 .dest-detail__actions {
@@ -22,6 +40,7 @@
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: var(--space-3);
+  counter-reset: archive-tile;
 }
 
 @media (min-width: 640px) {
@@ -31,24 +50,44 @@
   .dest-detail__section-grid { grid-template-columns: repeat(4, 1fr); }
 }
 
+/* Each research category is a numbered index entry in the archive —
+   catalogue number, title, holdings count. The numbering is a CSS
+   counter (purely presentational, follows tile order); the emoji
+   icons are decorative (aria-hidden) and are replaced by it. */
 .section-tile {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: var(--space-1);
+  gap: var(--space-2);
+  min-height: 104px;
 }
 
-.section-tile__icon { font-size: var(--text-xl); }
+.section-tile::before {
+  counter-increment: archive-tile;
+  content: counter(archive-tile, decimal-leading-zero);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-label);
+  color: var(--color-text-secondary);
+}
+
+.section-tile__icon { display: none; }
 
 .section-tile__label {
   font-weight: 600;
-  font-size: var(--text-sm);
+  font-size: var(--text-base);
   line-height: var(--leading-tight);
+  color: var(--color-text-strong);
 }
 
+/* Holdings count: mono figure pinned to the bottom of the tile. */
 .section-tile__count {
-  font-size: var(--text-xs);
-  color: var(--color-text-muted);
+  margin-top: auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-lg);
+  font-weight: 500;
+  color: var(--petrol);
+  font-variant-numeric: tabular-nums;
 }
 
 /* ---- Tabs (Chunk 10) ---- */
@@ -56,22 +95,26 @@
   display: flex;
   gap: var(--space-1);
   border-bottom: 1px solid var(--color-border);
-  margin-bottom: var(--space-4);
+  margin-bottom: var(--space-5);
 }
 
 .dest-detail__tab {
   background: none;
   border: none;
-  border-bottom: 2px solid transparent;
-  padding: var(--space-2) var(--space-3);
+  border-bottom: 3px solid transparent;
+  margin-bottom: -1px;
+  padding: var(--space-3) var(--space-4);
+  min-height: 44px;
   font-size: var(--text-base);
   font-weight: 600;
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   cursor: pointer;
+  transition: color var(--transition-fast), border-color var(--transition-fast);
 }
+.dest-detail__tab:hover { color: var(--color-text-strong); }
 .dest-detail__tab--active {
-  color: var(--color-teal-dark);
-  border-bottom-color: var(--color-teal);
+  color: var(--petrol);
+  border-bottom-color: var(--orange);
 }
 
 /* ---- Cities tab ---- */
@@ -96,8 +139,10 @@
 }
 
 .city-card__name {
-  font-size: var(--text-lg);
-  font-weight: 700;
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  font-weight: 500;
+  color: var(--color-text-strong);
 }
 
 .city-card__actions {
@@ -122,7 +167,7 @@
 .city-card__rename-row .field { flex: 1; margin-bottom: 0; }
 .city-card__rename-row button {
   background: var(--color-teal);
-  color: white;
+  color: var(--paper-raised);
   border: none;
   border-radius: var(--radius-sm);
   padding: 2px 8px;
@@ -233,7 +278,7 @@
 .locations-panel__chip--active {
   background: var(--color-teal);
   border-color: var(--color-teal);
-  color: white;
+  color: var(--paper-raised);
 }
 
 .locations-panel__chip-actions {
@@ -258,7 +303,7 @@
 .locations-panel__rename-row .field { margin-bottom: 0; }
 .locations-panel__rename-row button {
   background: var(--color-teal);
-  color: white;
+  color: var(--paper-raised);
   border: none;
   border-radius: var(--radius-sm);
   padding: 2px 8px;

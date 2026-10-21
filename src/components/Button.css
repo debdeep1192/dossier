@@ -3,32 +3,37 @@
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
-  border: none;
+  border: 1px solid transparent;
   border-radius: var(--radius-md);
+  font-family: var(--font-body);
   font-weight: 600;
+  letter-spacing: 0.005em;
   cursor: pointer;
-  transition: background-color var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
+  transition: background-color var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast);
   white-space: nowrap;
 }
 
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
-.btn--sm { padding: var(--space-1) var(--space-3); font-size: var(--text-sm); }
-.btn--md { padding: var(--space-3) var(--space-4); font-size: var(--text-base); }
-.btn--lg { padding: var(--space-4) var(--space-6); font-size: var(--text-md); }
+/* min-height keeps even the small variant a usable touch target. */
+.btn--sm { padding: var(--space-1) var(--space-3); font-size: var(--text-sm); min-height: 34px; }
+.btn--md { padding: var(--space-3) var(--space-4); font-size: var(--text-base); min-height: 44px; }
+.btn--lg { padding: var(--space-4) var(--space-6); font-size: var(--text-md); min-height: 52px; }
 
 .btn--full { width: 100%; }
 
-.btn--primary { background: var(--color-action); color: white; }
+/* Primary = deep petrol, paper label (7.5:1). */
+.btn--primary { background: var(--color-action); color: var(--paper-raised); }
 .btn--primary:hover:not(:disabled) { background: var(--color-action-hover); }
+.btn--primary:active:not(:disabled) { background: var(--abyss); }
 
-.btn--secondary { background: var(--color-surface-sage); color: var(--color-teal-dark); border: 1px solid var(--color-border); }
-.btn--secondary:hover:not(:disabled) { background: var(--color-sage); border-color: var(--color-border-strong); }
+.btn--secondary { background: var(--color-surface); color: var(--petrol); border-color: var(--color-border-strong); }
+.btn--secondary:hover:not(:disabled) { background: var(--color-surface-selected); border-color: var(--petrol); }
 
 .btn--ghost { background: transparent; color: var(--color-text-secondary); }
-.btn--ghost:hover:not(:disabled) { background: var(--color-neutral-200); color: var(--color-text-primary); }
+.btn--ghost:hover:not(:disabled) { background: var(--tint-neutral); color: var(--color-text-strong); }
 
 .btn--danger { background: transparent; color: var(--color-danger); }
-.btn--danger:hover:not(:disabled) { background: #FBEEE9; }
+.btn--danger:hover:not(:disabled) { background: var(--tint-orange); }
 
 .btn__icon { display: inline-flex; line-height: 1; }

@@ -1,79 +1,147 @@
 /* ==========================================================
-   DESIGN TOKENS
-   The visual language for the whole application. Every future
-   phase/screen should draw from these variables rather than
-   introducing new one-off colors, sizes, or shadows.
+   DESIGN TOKENS — Debdeep Travels · "The Expedition Archive"
+
+   One source of truth for the whole application. Components
+   should read the SEMANTIC roles (--color-text-primary,
+   --color-action, --font-mono …) and never introduce one-off
+   hex values; only this file knows the actual palette.
+
+   Contrast (WCAG 2.x, computed — not eyeballed):
+     graphite on paper        10.1 : 1   body text
+     ink-muted on paper        5.1 : 1   secondary text (AA)
+     petrol on paper           7.5 : 1   links, selected state
+     paper on petrol           7.5 : 1   primary button
+     abyss on orange           4.9 : 1   important button / FAB
+     orange-ink on paper       5.2 : 1   accent TEXT
+     glacial on abyss         10.1 : 1   dark surfaces
+   Raw orange (#D77845) is only 2.7 : 1 on paper, so it is used
+   for fills, markers and dark surfaces — never as text on paper.
+   Text accents use --orange-ink instead.
    ========================================================== */
 
 :root {
-  /* ---- Color: brand palette (as specified) ---- */
-  --color-teal: #2A9D8F;
-  --color-teal-dark: #227d72;
-  --color-teal-light: #6DBFB4;
+  /* ---- Brand palette ---- */
+  --abyss: #14272E;        /* strong headings, dark surfaces            */
+  --petrol: #24505A;       /* primary brand, selected states            */
+  --glacial: #B7D8D2;      /* highlights / selected on dark surfaces    */
+  --orange: #D77845;       /* expedition orange: important actions, markers (fill only on paper) */
+  --paper: #EEECE3;        /* mineral paper — main light background     */
+  --graphite: #30383A;     /* body text                                 */
+  --field-grey: #C9CEC8;   /* hairlines, dividers, decorative borders   */
 
-  --color-coral: #E76F51;
-  --color-coral-dark: #c9532f;
-  --color-coral-light: #F0A08C;
+  /* ---- Palette derivatives ---- */
+  --petrol-dark: #1B3F48;      /* hover/pressed on petrol                        */
+  --petrol-light: #6FA39B;     /* quiet accents (accent bars, illustration)      */
+  --glacial-soft: #DCEBE7;     /* selected / hover wash on paper                 */
+  --orange-bright: #E08652;    /* hover on orange fills — LIGHTER, so the abyss label keeps 5:1 */
+  --orange-ink: #9C4B22;       /* orange used as TEXT (5.2:1 on paper)           */
+  --orange-light: #E7A582;
+  --slate: #4F6872;            /* cool secondary hue (replaces any gold/yellow)  */
+  --paper-raised: #F7F6F0;     /* cards, inputs, sheets — one step above paper   */
+  --paper-sunken: #E4E2D6;     /* wells, out-of-range days, quiet fills          */
+  --ink-muted: #5A6568;        /* secondary text, hints, counts (5.1:1 on paper) */
+  --rule-strong: #788785;      /* form-control borders (>=3:1 non-text contrast) */
+  --glacial-muted: #9DBDB8;    /* inactive text on abyss (7.7:1)                 */
+  --color-placeholder: #657073;/* input placeholder (4.7:1 on raised paper)      */
 
-  --color-saffron: #E9C46A;
-  --color-saffron-dark: #C9A23F;
+  /* Tinted fills for badges / status washes — each paired with a
+     text colour that clears 4.5:1 on it. */
+  --tint-orange: #F2DFD2;
+  --tint-petrol: #D8E6E2;
+  --tint-slate: #DFE6E7;
+  --tint-neutral: #E3E2D8;
 
-  --color-ivory: #FAF8F3;
-  --color-sage: #EEF6F3;
-  --color-charcoal: #263238;
+  --success: #2F6B57;
+  --danger: #9B3F22;
 
-  /* ---- Color: neutrals (extended — not in original spec, needed for
-     borders/secondary text since the given palette has none) ---- */
-  --color-neutral-100: #FFFFFF;
-  --color-neutral-200: #F3F1EB;
-  --color-neutral-300: #E4E0D6;
-  --color-neutral-400: #C7C2B4;
-  --color-neutral-500: #8A9A96; /* muted sage-gray: borders, secondary text, disabled states */
-  --color-neutral-600: #5C6B67;
-  --color-neutral-700: #3A4644;
+  /* ==== Semantic roles — what components should use ==== */
+  --color-bg: var(--paper);
+  --color-surface: var(--paper-raised);
+  --color-surface-sunken: var(--paper-sunken);
+  --color-surface-selected: var(--glacial-soft);
+  --color-surface-dark: var(--abyss);
+  --color-text-primary: var(--graphite);
+  --color-text-strong: var(--abyss);
+  --color-text-secondary: var(--ink-muted);
+  --color-text-muted: var(--ink-muted);
+  --color-text-on-dark: var(--paper);
+  --color-text-on-dark-muted: var(--glacial);
+  --color-border: var(--field-grey);
+  --color-border-strong: var(--rule-strong);
 
-  /* ---- Color: semantic roles ---- */
-  --color-bg: var(--color-ivory);
-  --color-surface: var(--color-neutral-100);
-  --color-surface-sage: var(--color-sage);
-  --color-text-primary: var(--color-charcoal);
-  --color-text-secondary: var(--color-neutral-600);
-  --color-text-muted: var(--color-neutral-500);
-  --color-border: var(--color-neutral-300);
-  --color-border-strong: var(--color-neutral-400);
+  --color-action: var(--petrol);              /* primary actions, links, selected */
+  --color-action-hover: var(--petrol-dark);
+  --color-important: var(--orange);           /* the one loud action: add, resolve */
+  --color-important-hover: var(--orange-bright);
+  --color-important-text: var(--abyss);       /* text ON orange (4.9:1)            */
+  --color-accent-text: var(--orange-ink);     /* orange as TEXT on paper           */
+  --color-attention: var(--orange-ink);
+  --color-focus: var(--petrol);
 
-  --color-action: var(--color-teal);
-  --color-action-hover: var(--color-teal-dark);
-  --color-attention: var(--color-coral);
-  --color-attention-hover: var(--color-coral-dark);
-  --color-discovery: var(--color-saffron);
-  --color-discovery-dark: var(--color-saffron-dark);
+  --color-success: var(--success);
+  --color-danger: var(--danger);
 
-  --color-success: #4C8C6B;
-  --color-danger: #C9532F;
+  /* ---- Priority colours (Research item priority / visit priority) ---- */
+  --color-priority-must-know: var(--orange);
+  --color-priority-useful: var(--petrol);
+  --color-priority-optional: var(--slate);
+  --color-priority-reference: var(--ink-muted);
 
-  /* ---- Priority badge colors (Research Item priority field) ---- */
-  --color-priority-must-know: var(--color-coral);
-  --color-priority-useful: var(--color-teal);
-  --color-priority-optional: var(--color-saffron-dark);
-  --color-priority-reference: var(--color-neutral-500);
+  /* ==== Legacy names ====
+     The original palette was named after its hues (teal, coral,
+     saffron …). Dozens of component rules still reference those
+     names, so they are kept as ALIASES onto the new palette —
+     everything re-themes consistently without a risky mass rename.
+     New code should use the semantic roles above. */
+  --color-teal: var(--petrol);
+  --color-teal-dark: var(--petrol-dark);
+  --color-teal-light: var(--petrol-light);
+  --color-coral: var(--orange);
+  --color-coral-dark: var(--orange-ink);
+  --color-coral-light: var(--orange-light);
+  --color-saffron: var(--slate);
+  --color-saffron-dark: var(--slate);
+  --color-discovery: var(--slate);
+  --color-discovery-dark: var(--slate);
+  --color-attention-hover: var(--orange-ink);
+  --color-ivory: var(--paper);
+  --color-sage: var(--glacial-soft);
+  --color-surface-sage: var(--paper-sunken);
+  --color-charcoal: var(--graphite);
+  --color-neutral-100: var(--paper-raised);
+  --color-neutral-200: var(--tint-neutral);
+  --color-neutral-300: var(--field-grey);
+  --color-neutral-400: var(--rule-strong);
+  --color-neutral-500: var(--ink-muted);
+  --color-neutral-600: var(--ink-muted);
+  --color-neutral-700: var(--graphite);
 
-  /* ---- Typography ---- */
-  --font-display: 'Source Serif 4', Georgia, 'Times New Roman', serif;
-  --font-body: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  --font-tabular: 'Inter', -apple-system, sans-serif;
+  /* ==== Typography ====
+     Newsreader  — editorial: destination names, page headings.
+     IBM Plex Sans — interface: navigation, forms, buttons, labels.
+     IBM Plex Mono — figures: dates, times, counts, identifiers.
+     Every stack has a full system fallback; fonts are self-hosted
+     (see fonts.css), so there is no network dependency. */
+  --font-display: 'Newsreader', 'Source Serif 4', Georgia, 'Times New Roman', serif;
+  --font-body: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --font-tabular: var(--font-mono);
 
-  --text-xs: 0.75rem;    /* 12px */
-  --text-sm: 0.8125rem;  /* 13px */
-  --text-base: 0.9375rem;/* 15px */
-  --text-md: 1.0625rem;  /* 17px */
-  --text-lg: 1.25rem;    /* 20px */
-  --text-xl: 1.625rem;   /* 26px */
-  --text-2xl: 2rem;      /* 32px */
+  --text-xs: 0.75rem;     /* 12px */
+  --text-sm: 0.8125rem;   /* 13px */
+  --text-base: 0.9375rem; /* 15px */
+  --text-md: 1.0625rem;   /* 17px */
+  --text-lg: 1.25rem;     /* 20px */
+  --text-xl: 1.625rem;    /* 26px */
+  --text-2xl: 2.125rem;   /* 34px */
+  --text-3xl: 2.75rem;    /* 44px — hero only */
 
-  --leading-tight: 1.25;
+  --leading-tight: 1.2;
   --leading-normal: 1.5;
   --leading-relaxed: 1.7;
+
+  --tracking-label: 0.08em;   /* uppercase mono / sans labels */
+  --tracking-display: -0.01em;
 
   /* ---- Spacing scale (4px base) ---- */
   --space-1: 0.25rem;
@@ -87,22 +155,24 @@
   --space-12: 3rem;
   --space-16: 4rem;
 
-  /* ---- Radii — restrained, not childish-rounded ---- */
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
+  /* ---- Radii — instrument-like, not bubbly ---- */
+  --radius-sm: 3px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
   --radius-full: 999px;
 
-  /* ---- Shadows — subtle, used sparingly ---- */
-  --shadow-sm: 0 1px 2px rgba(38, 50, 56, 0.06);
-  --shadow-md: 0 2px 8px rgba(38, 50, 56, 0.08);
-  --shadow-lg: 0 8px 24px rgba(38, 50, 56, 0.12);
+  /* ---- Shadows — abyss-tinted, used sparingly ---- */
+  --shadow-sm: 0 1px 2px rgba(20, 39, 46, 0.06);
+  --shadow-md: 0 2px 8px rgba(20, 39, 46, 0.09);
+  --shadow-lg: 0 10px 28px rgba(20, 39, 46, 0.16);
+  --focus-ring: 0 0 0 3px var(--glacial);
 
   /* ---- Layout ---- */
   --max-content-width: 1120px;
   --nav-height-mobile: 60px;
+  --header-height-mobile: 52px;
   --header-height-desktop: 64px;
-  --sidebar-width: 240px;
+  --sidebar-width: 244px;
 
   /* ---- Motion ---- */
   --transition-fast: 120ms ease;
