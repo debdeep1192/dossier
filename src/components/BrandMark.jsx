@@ -1,6 +1,7 @@
 // The Debdeep Travels mark: a survey bearing on contour rings.
 // Inline SVG so it inherits sizing from CSS and needs no request.
-// Same artwork as public/favicon.svg (kept visually in step by hand).
+// The favicon and installed-app icons (public/, design/icon-sources/) are
+// size-adapted cuts of this same mark, not scaled copies of it.
 // Decorative by default (aria-hidden) — the wordmark beside it carries
 // the accessible name.
 const RING = (cx, cy, r, phase, amp, n = 48) => {

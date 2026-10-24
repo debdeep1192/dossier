@@ -34,7 +34,7 @@
   min-height: var(--header-height-mobile);
   padding: env(safe-area-inset-top) var(--space-4) 0;
   background: var(--abyss);
-  border-bottom: 1px solid rgba(183, 216, 210, 0.18);
+  border-bottom: 1px solid color-mix(in srgb, var(--glacial) 18%, transparent);
 }
 
 .app-shell__masthead-brand {
@@ -176,7 +176,7 @@
     gap: var(--space-3);
     padding: var(--space-1) var(--space-2) var(--space-5);
     margin-bottom: var(--space-5);
-    border-bottom: 1px solid rgba(183, 216, 210, 0.2);
+    border-bottom: 1px solid color-mix(in srgb, var(--glacial) 20%, transparent);
     color: var(--paper);
     text-decoration: none;
   }
@@ -230,13 +230,13 @@
   }
 
   .app-shell__sidebar-link:hover {
-    background: rgba(183, 216, 210, 0.08);
+    background: color-mix(in srgb, var(--glacial) 8%, transparent);
     text-decoration: none;
     color: var(--paper);
   }
 
   .app-shell__sidebar-link--active {
-    background: rgba(183, 216, 210, 0.13);
+    background: color-mix(in srgb, var(--glacial) 13%, transparent);
     color: var(--paper);
     font-weight: 600;
   }

@@ -2,11 +2,18 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- Favicon: a simplified cut of the brand mark drawn for 16-24px (SVG),
+         with a 32px PNG fallback for browsers that ignore SVG favicons. -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" sizes="any" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <!-- Installed-app identity (name, icons, colours). No service worker. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <!-- Abyss: matches the mobile masthead so the browser chrome and the
-         app header read as one surface. -->
-    <meta name="theme-color" content="#14272E" />
+    <!-- Ink (#17232A): matches the mobile masthead so the browser chrome
+         and the app header read as one surface. Keep in step with
+         theme_color in public/manifest.webmanifest. -->
+    <meta name="theme-color" content="#17232A" />
     <meta name="application-name" content="Debdeep Travels" />
     <meta name="apple-mobile-web-app-title" content="Debdeep Travels" />
     <meta name="description" content="Debdeep Travels — a personal travel research, planning and archive application." />

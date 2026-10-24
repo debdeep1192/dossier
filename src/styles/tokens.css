@@ -7,13 +7,13 @@
    hex values; only this file knows the actual palette.
 
    Contrast (WCAG 2.x, computed — not eyeballed):
-     graphite on paper        10.1 : 1   body text
-     ink-muted on paper        5.1 : 1   secondary text (AA)
-     petrol on paper           7.5 : 1   links, selected state
-     paper on petrol           7.5 : 1   primary button
-     abyss on orange           4.9 : 1   important button / FAB
+     graphite on paper        10.3 : 1   body text
+     ink-muted on paper        5.3 : 1   secondary text (AA)
+     petrol on paper           7.9 : 1   links, selected state
+     paper on petrol           8.6 : 1   primary button
+     ink on orange             5.1 : 1   important button / FAB
      orange-ink on paper       5.2 : 1   accent TEXT
-     glacial on abyss         10.1 : 1   dark surfaces
+     frost (glacial) on ink   10.5 : 1   dark surfaces
    Raw orange (#D77845) is only 2.7 : 1 on paper, so it is used
    for fills, markers and dark surfaces — never as text on paper.
    Text accents use --orange-ink instead.
@@ -21,34 +21,34 @@
 
 :root {
   /* ---- Brand palette ---- */
-  --abyss: #14272E;        /* strong headings, dark surfaces            */
-  --petrol: #24505A;       /* primary brand, selected states            */
-  --glacial: #B7D8D2;      /* highlights / selected on dark surfaces    */
+  --abyss: #17232A;        /* ink: strong headings, dark surfaces       */
+  --petrol: #2D4B57;       /* primary brand, selected states            */
+  --glacial: #C2D5D9;      /* highlights / selected on dark surfaces (cool frost) */
   --orange: #D77845;       /* expedition orange: important actions, markers (fill only on paper) */
   --paper: #EEECE3;        /* mineral paper — main light background     */
-  --graphite: #30383A;     /* body text                                 */
+  --graphite: #2F373A;     /* body text                                 */
   --field-grey: #C9CEC8;   /* hairlines, dividers, decorative borders   */
 
   /* ---- Palette derivatives ---- */
-  --petrol-dark: #1B3F48;      /* hover/pressed on petrol                        */
-  --petrol-light: #6FA39B;     /* quiet accents (accent bars, illustration)      */
-  --glacial-soft: #DCEBE7;     /* selected / hover wash on paper                 */
+  --petrol-dark: #1E3640;      /* hover/pressed on petrol                        */
+  --petrol-light: #7F9AA4;     /* quiet accents (accent bars, illustration)      */
+  --glacial-soft: #E3EBED;     /* selected / hover wash on paper (cool frost)    */
   --orange-bright: #E08652;    /* hover on orange fills — LIGHTER, so the abyss label keeps 5:1 */
   --orange-ink: #9C4B22;       /* orange used as TEXT (5.2:1 on paper)           */
   --orange-light: #E7A582;
-  --slate: #4F6872;            /* cool secondary hue (replaces any gold/yellow)  */
+  --slate: #52666E;            /* cool secondary hue (replaces any gold/yellow)  */
   --paper-raised: #F7F6F0;     /* cards, inputs, sheets — one step above paper   */
   --paper-sunken: #E4E2D6;     /* wells, out-of-range days, quiet fills          */
-  --ink-muted: #5A6568;        /* secondary text, hints, counts (5.1:1 on paper) */
-  --rule-strong: #788785;      /* form-control borders (>=3:1 non-text contrast) */
-  --glacial-muted: #9DBDB8;    /* inactive text on abyss (7.7:1)                 */
-  --color-placeholder: #657073;/* input placeholder (4.7:1 on raised paper)      */
+  --ink-muted: #586267;        /* secondary text, hints, counts (5.3:1 on paper) */
+  --rule-strong: #737E83;      /* form-control borders (>=3:1 non-text contrast) */
+  --glacial-muted: #A4B6BB;    /* inactive text on ink                           */
+  --color-placeholder: #646C70;/* input placeholder (5.0:1 on raised paper)      */
 
   /* Tinted fills for badges / status washes — each paired with a
      text colour that clears 4.5:1 on it. */
   --tint-orange: #F2DFD2;
-  --tint-petrol: #D8E6E2;
-  --tint-slate: #DFE6E7;
+  --tint-petrol: #DBE4E7;
+  --tint-slate: #DFE7E9;
   --tint-neutral: #E3E2D8;
 
   --success: #2F6B57;
@@ -162,9 +162,9 @@
   --radius-full: 999px;
 
   /* ---- Shadows — abyss-tinted, used sparingly ---- */
-  --shadow-sm: 0 1px 2px rgba(20, 39, 46, 0.06);
-  --shadow-md: 0 2px 8px rgba(20, 39, 46, 0.09);
-  --shadow-lg: 0 10px 28px rgba(20, 39, 46, 0.16);
+  --shadow-sm: 0 1px 2px color-mix(in srgb, var(--abyss) 6%, transparent);
+  --shadow-md: 0 2px 8px color-mix(in srgb, var(--abyss) 9%, transparent);
+  --shadow-lg: 0 10px 28px color-mix(in srgb, var(--abyss) 16%, transparent);
   --focus-ring: 0 0 0 3px var(--glacial);
 
   /* ---- Layout ---- */

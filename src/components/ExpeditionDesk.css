@@ -68,9 +68,9 @@
   height: 8px;
   border-radius: 50%;
   background: var(--orange);
-  box-shadow: 0 0 0 3px rgba(215, 120, 69, 0.28);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--orange) 28%, transparent);
 }
-.desk__phase--upcoming .desk__phase-dot { background: var(--glacial); box-shadow: 0 0 0 3px rgba(183, 216, 210, 0.22); }
+.desk__phase--upcoming .desk__phase-dot { background: var(--glacial); box-shadow: 0 0 0 3px color-mix(in srgb, var(--glacial) 22%, transparent); }
 .desk__phase--past .desk__phase-dot { background: var(--glacial-muted); box-shadow: none; }
 
 .desk__trip {
@@ -95,7 +95,7 @@
   gap: var(--space-3);
   margin: 0;
   padding-top: var(--space-5);
-  border-top: 1px solid rgba(183, 216, 210, 0.22);
+  border-top: 1px solid color-mix(in srgb, var(--glacial) 22%, transparent);
 }
 
 .desk__stat {
